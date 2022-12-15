@@ -658,10 +658,12 @@ function uv_readcb(handle::Ptr{Cvoid}, nread::Cssize_t, buf::Ptr{Cvoid})
         if nread < 0
             if nread == UV_ENOBUFS && nrequested == 0
                 # remind the client that stream.buffer is full
+                #println("HERE 1")
                 notify(stream.cond)
             elseif nread == UV_EOF # libuv called uv_stop_reading already
                 if stream.status != StatusClosing
                     stream.status = StatusEOF
+                    #println("HERE 2")
                     notify(stream.cond)
                     if stream isa TTY
                         # stream can still be used by reseteof (or possibly write)
@@ -675,6 +677,7 @@ function uv_readcb(handle::Ptr{Cvoid}, nread::Cssize_t, buf::Ptr{Cvoid})
                 end
             else
                 stream.readerror = _UVError("read", nread)
+                #println("HERE 3")
                 notify(stream.cond)
                 # This is a fatal connection error
                 ccall(:jl_close_uv, Cvoid, (Ptr{Cvoid},), stream.handle)
@@ -682,6 +685,7 @@ function uv_readcb(handle::Ptr{Cvoid}, nread::Cssize_t, buf::Ptr{Cvoid})
             end
         else
             notify_filled(stream.buffer, nread)
+            #println("HERE 4")
             notify(stream.cond)
         end
         unlock(stream.cond)
@@ -719,6 +723,7 @@ function _uv_hook_close(uv::Union{LibuvStream, LibuvServer})
         uv.handle = C_NULL
         uv.status = StatusClosed
         # notify any listeners that exist on this libuv stream type
+        #println("HERE 5")
         notify(uv.cond)
     finally
         unlock(uv.cond)
