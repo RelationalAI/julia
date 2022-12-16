@@ -45,7 +45,7 @@ using Base: LibuvStream, LibuvServer, PipeEndpoint, @handle_as, uv_error, associ
     UV_EAI_BADHINTS, UV_EAI_CANCELED, UV_EAI_FAIL,
     UV_EAI_FAMILY, UV_EAI_NODATA, UV_EAI_NONAME,
     UV_EAI_OVERFLOW, UV_EAI_PROTOCOL, UV_EAI_SERVICE,
-    UV_EAI_SOCKTYPE, UV_EAI_MEMORY
+    UV_EAI_SOCKTYPE, UV_EAI_MEMORY, StatusEOF, StatusPaused
 
 include("IPAddr.jl")
 include("addrinfo.jl")
@@ -999,15 +999,15 @@ function Base.closewrite(s::TCPSocket)
     end
     ct = current_task()
     preserve_handle(ct)
-    sigatomic_begin()
+    Base.sigatomic_begin()
     uv_req_set_data(req, ct)
     iolock_end(s)
     status = try
-        sigatomic_end()
+        Base.sigatomic_end()
         wait()::Cint
     finally
         # try-finally unwinds the sigatomic level, so need to repeat sigatomic_end
-        sigatomic_end()
+        Base.sigatomic_end()
         iolock_begin(s)
         ct.queue === nothing || list_deletefirst!(ct.queue, ct)
         if uv_req_data(req) != C_NULL
@@ -1068,7 +1068,7 @@ function Base.uvfinalize(uv::TCPSocket)
     nothing
 end
 
-function Base.start_reading(stream::TCPSocket)
+function start_reading(stream::TCPSocket)
     iolock_begin(stream)
     if stream.status == StatusOpen
         if !isreadable(stream)
@@ -1260,22 +1260,24 @@ function Base.readuntil(x::TCPSocket, c::UInt8; keep::Bool=false)
     return bytes
 end
 
-function Base.uv_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
-    uvw = uv_write_async(s, p, n)
+uv_write(s::TCPSocket, p::Vector{UInt8}) = GC.@preserve p uv_write(s, pointer(p), UInt(sizeof(p)))
+
+function uv_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
+    uvw = Base.uv_write_async(s, p, n)
     ct = current_task()
     preserve_handle(ct)
-    sigatomic_begin()
+    Base.sigatomic_begin()
     uv_req_set_data(uvw, ct)
     iolock_end(s)
     status = try
-        sigatomic_end()
+        Base.sigatomic_end()
         # wait for the last chunk to complete (or error)
         # assume that any errors would be sticky,
         # (so we don't need to monitor the error status of the intermediate writes)
         wait()::Cint
     finally
         # try-finally unwinds the sigatomic level, so need to repeat sigatomic_end
-        sigatomic_end()
+        Base.sigatomic_end()
         iolock_begin(s)
         ct.queue === nothing || list_deletefirst!(ct.queue, ct)
         if uv_req_data(uvw) != C_NULL
