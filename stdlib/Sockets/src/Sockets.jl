@@ -66,7 +66,6 @@ mutable struct TCPSocket <: LibuvStream
     sendbuf::Union{IOBuffer, Nothing}
     lock::ReentrantLock # advisory lock
     throttle::Int
-    eventLoop::Ptr{Cvoid}
     socklock::Ptr{Cvoid}
 
     function TCPSocket(handle::Ptr{Cvoid}, status)
@@ -79,7 +78,6 @@ mutable struct TCPSocket <: LibuvStream
                 nothing,
                 ReentrantLock(),
                 Base.DEFAULT_READ_BUFFER_SZ,
-                Ptr{Nothing}(),
                 Ptr{Nothing}())
         associate_julia_struct(tcp.handle, tcp)
         finalizer(uvfinalize, tcp)
@@ -88,15 +86,17 @@ mutable struct TCPSocket <: LibuvStream
 end
 
 function Base.iolock_begin(s::TCPSocket)
-    ccall(:jl_socklock_begin, Cvoid, (Ptr{Cvoid},Ptr{Cvoid},), s.eventLoop, s.socklock)
+    ccall(:jl_socklock_begin, Cvoid, (Ptr{Cvoid},), s.socklock)
+    iolock_begin()
 end
 
 function Base.iolock_end(s::TCPSocket)
+    iolock_end()
     ccall(:jl_socklock_end, Cvoid, (Ptr{Cvoid},), s.socklock)
 end
 
-function init_socklock(loop::Ptr{Cvoid}, socklock::Ptr{Cvoid})
-    ccall(:jl_init_socklock, Cvoid, (Ptr{Cvoid}, Ptr{Cvoid},), loop, socklock)
+function init_socklock(socklock::Ptr{Cvoid})
+    ccall(:jl_init_socklock, Cvoid, (Ptr{Cvoid},), socklock)
 end
 
 function sizeof_socklock()
@@ -107,17 +107,14 @@ end
 function TCPSocket(; delay=true)
     tcp = TCPSocket(Libc.malloc(Base._sizeof_uv_tcp), StatusUninit)
     af_spec = delay ? 0 : 2   # AF_UNSPEC is 0, AF_INET is 2
-    eventLoop = Libc.malloc(sizeof_uvloop())
-    uv_loop_init(eventLoop)
-    tcp.eventLoop = eventLoop
 
     socklock = Libc.malloc(sizeof_socklock())
-    init_socklock(eventLoop, socklock)
+    init_socklock(socklock)
     tcp.socklock = socklock
 
     iolock_begin(tcp)
     err = ccall(:uv_tcp_init_ex, Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Cuint),
-                eventLoop, tcp.handle, af_spec)
+                eventloop(), tcp.handle, af_spec)
     uv_error("failed to create tcp socket", err)
     tcp.status = StatusInit
     iolock_end(tcp)
@@ -1363,18 +1360,6 @@ function Base.wait(s::TCPSocket)
     process_events(s)
     # return when we come out of the queue
     return result
-end
-
-function process_events(s::TCPSocket)
-    return ccall(:jl_process_events2, Int32, (Ptr{Cvoid},), s.eventLoop)
-end
-
-function sizeof_uvloop()
-    return ccall(:jl_sizeof_uvloop, Int32, ())
-end
-
-function uv_loop_init(l::Ptr{Cvoid})
-    return ccall(:jl_uv_loop_init, Int32, (Ptr{Cvoid},), l)
 end
 
 # domain sockets

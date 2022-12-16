@@ -2016,17 +2016,13 @@ JL_DLLEXPORT int jl_process_events(void);
 
 JL_DLLEXPORT int jl_sizeof_uvloop(void);
 
-JL_DLLEXPORT int jl_uv_loop_init(struct uv_loop_s *loop);
-
-JL_DLLEXPORT void jl_socklock_begin(struct uv_loop_s *loop, struct socklock_s *socklock);
+JL_DLLEXPORT void jl_socklock_begin(struct socklock_s *socklock);
 
 JL_DLLEXPORT void jl_socklock_end(struct socklock_s *socklock);
 
 JL_DLLEXPORT int jl_sizeof_socklock(void);
 
-JL_DLLEXPORT void jl_init_socklock(struct uv_loop_s *loop, struct socklock_s *socklock);
-
-JL_DLLEXPORT int jl_process_events2(struct uv_loop_s *loop);
+JL_DLLEXPORT void jl_init_socklock(struct socklock_s *socklock);
 
 JL_DLLEXPORT struct uv_loop_s *jl_global_event_loop(void);
 

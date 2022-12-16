@@ -90,39 +90,25 @@ static void locker_cb(uv_loop_t* loop, uv_looplock_mode mode) {
 
 struct socklock_s {
   jl_mutex_t jl_uv_mutex;
-  _Atomic(int) jl_uv_n_waiters;
-  uv_async_t signal_async;
+  _Atomic(int) jl_uv_n_waiters; // TODO @vustef: This is not needed, we may just remove it, and remove atomic_fetch et al below?
 };
 
 typedef struct socklock_s socklock;
 
-static void jl_signal_async_cb_sock(uv_async_t *hdl)
+void jl_init_uv_sock(socklock* sl)
 {
-    // This should abort the current loop and the julia code it returns to
-    // or the safepoint in the callers of `uv_run` should throw the exception.
-    uv_stop(hdl->loop);
-}
-
-void jl_init_uv_sock(uv_loop_t* loop, socklock* sl)
-{
-    uv_async_init(loop, &(sl->signal_async), jl_signal_async_cb_sock);
     JL_MUTEX_INIT(&(sl->jl_uv_mutex)); // a file-scope initializer can be used instead
 }
 
-void jl_wake_libuv_sock(socklock* sl)
-{
-    uv_async_send(&(sl->signal_async));
-}
-
-void JL_UV_LOCK_SOCK(uv_loop_t* loop, socklock* sl)
+void JL_UV_LOCK_SOCK(socklock* sl)
 {
     if (jl_mutex_trylock(&(sl->jl_uv_mutex))) {
     }
     else {
         jl_atomic_fetch_add_relaxed(&(sl->jl_uv_n_waiters), 1);
         jl_fence(); // [^store_buffering_2]
-        jl_wake_libuv_sock(sl);
-        JL_LOCK(&jl_uv_mutex);
+        jl_wake_libuv();
+        JL_LOCK(&(sl->jl_uv_mutex)); // TODO @vustef: Here was a problem with previous branch, try this on `vs-182-eventloop-per-socket`.
         jl_atomic_fetch_add_relaxed(&(sl->jl_uv_n_waiters), -1);
     }
 }
@@ -131,10 +117,10 @@ void JL_UV_UNLOCK_SOCK(socklock* sl) {
     JL_UNLOCK(&(sl->jl_uv_mutex));
 }
 
-JL_DLLEXPORT void jl_init_socklock(uv_loop_t* loop, socklock* sl)
+JL_DLLEXPORT void jl_init_socklock(socklock* sl)
 {
     sl->jl_uv_n_waiters = 0;
-    jl_init_uv_sock(loop, sl);
+    jl_init_uv_sock(sl);
 }
 
 JL_DLLEXPORT int jl_sizeof_socklock(void)
@@ -142,9 +128,9 @@ JL_DLLEXPORT int jl_sizeof_socklock(void)
     return sizeof(struct socklock_s);
 }
 
-JL_DLLEXPORT void jl_socklock_begin(uv_loop_t* loop, socklock* sl)
+JL_DLLEXPORT void jl_socklock_begin(socklock* sl)
 {
-    JL_UV_LOCK_SOCK(loop, sl);
+    JL_UV_LOCK_SOCK(sl);
 }
 
 JL_DLLEXPORT void jl_socklock_end(socklock* sl)
@@ -278,34 +264,6 @@ JL_DLLEXPORT int jl_process_events(void)
 {
     jl_task_t *ct = jl_current_task;
     uv_loop_t *loop = jl_io_loop;
-    jl_gc_safepoint_(ct->ptls);
-    if (loop && (jl_atomic_load_relaxed(&_threadedregion) || jl_atomic_load_relaxed(&ct->tid) == 0)) {
-        if (jl_atomic_load_relaxed(&jl_uv_n_waiters) == 0 && jl_mutex_trylock(&jl_uv_mutex)) {
-            JL_PROBE_RT_START_PROCESS_EVENTS(ct);
-            loop->stop_flag = 0;
-            int r = uv_run(loop, UV_RUN_NOWAIT);
-            JL_PROBE_RT_FINISH_PROCESS_EVENTS(ct);
-            JL_UV_UNLOCK();
-            return r;
-        }
-        jl_gc_safepoint_(ct->ptls);
-    }
-    return 0;
-}
-
-JL_DLLEXPORT int jl_sizeof_uvloop(void)
-{
-    return sizeof(uv_loop_t);
-}
-
-JL_DLLEXPORT int jl_uv_loop_init(uv_loop_t *loop)
-{
-    return uv_loop_init(loop);
-}
-
-JL_DLLEXPORT int jl_process_events2(uv_loop_t *loop)
-{
-    jl_task_t *ct = jl_current_task;
     jl_gc_safepoint_(ct->ptls);
     if (loop && (jl_atomic_load_relaxed(&_threadedregion) || jl_atomic_load_relaxed(&ct->tid) == 0)) {
         if (jl_atomic_load_relaxed(&jl_uv_n_waiters) == 0 && jl_mutex_trylock(&jl_uv_mutex)) {
