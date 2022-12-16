@@ -580,7 +580,7 @@ function wait_connected(x::LibuvStream)
             iolock_end()
             wait(x.cond)
             unlock(x.cond)
-            iolock_begin(tcp)
+            iolock_begin()
             lock(x.cond)
         end
         isopen(x) || x.readerror === nothing || throw(x.readerror)
@@ -603,7 +603,7 @@ function wait_connected(x::TCPSocket)
             iolock_end(x)
             wait(x.cond)
             unlock(x.cond)
-            iolock_begin(tcp)
+            iolock_begin(x)
             lock(x.cond)
         end
         isopen(x) || x.readerror === nothing || throw(x.readerror)
@@ -964,10 +964,10 @@ function Base.wait_readnb(x::TCPSocket, nb::Int)
             x.status == StatusEOF && break
             x.throttle = max(nb, x.throttle)
             start_reading(x) # ensure we are reading
-            iolock_end(tcp)
+            iolock_end(x)
             wait(x.cond)
             unlock(x.cond)
-            iolock_begin(tcp)
+            iolock_begin(x)
             lock(x.cond)
         end
     finally
@@ -987,7 +987,7 @@ function Base.wait_readnb(x::TCPSocket, nb::Int)
 end
 
 function Base.closewrite(s::TCPSocket)
-    iolock_begin(tcp)
+    iolock_begin(s)
     check_open(s)
     req = Libc.malloc(_sizeof_uv_shutdown)
     uv_req_set_data(req, C_NULL) # in case we get interrupted before arriving at the wait call
@@ -1001,14 +1001,14 @@ function Base.closewrite(s::TCPSocket)
     preserve_handle(ct)
     sigatomic_begin()
     uv_req_set_data(req, ct)
-    iolock_end(tcp)
+    iolock_end(s)
     status = try
         sigatomic_end()
         wait()::Cint
     finally
         # try-finally unwinds the sigatomic level, so need to repeat sigatomic_end
         sigatomic_end()
-        iolock_begin(tcp)
+        iolock_begin(s)
         ct.queue === nothing || list_deletefirst!(ct.queue, ct)
         if uv_req_data(req) != C_NULL
             # req is still alive,
@@ -1018,7 +1018,7 @@ function Base.closewrite(s::TCPSocket)
             # done with req
             Libc.free(req)
         end
-        iolock_end(tcp)
+        iolock_end(s)
         unpreserve_handle(ct)
     end
     if isopen(s)
@@ -1033,7 +1033,7 @@ function Base.closewrite(s::TCPSocket)
 end
 
 function Base.close(stream::TCPSocket)
-    iolock_begin(tcp)
+    iolock_begin(stream)
     should_wait = false
     if stream.status == StatusInit
         ccall(:jl_forceclose_uv, Cvoid, (Ptr{Cvoid},), stream.handle)
@@ -1045,7 +1045,7 @@ function Base.close(stream::TCPSocket)
             stream.status = StatusClosing
         end
     end
-    iolock_end(tcp)
+    iolock_end(stream)
     should_wait && wait_close(stream)
     nothing
 end
@@ -1053,7 +1053,7 @@ end
 
 function Base.uvfinalize(uv::TCPSocket)
     uv.handle == C_NULL && return
-    iolock_begin(tcp)
+    iolock_begin(uv)
     if uv.handle != C_NULL
         Base.disassociate_julia_struct(uv.handle) # not going to call the usual close hooks
         if uv.status != StatusUninit
@@ -1064,12 +1064,12 @@ function Base.uvfinalize(uv::TCPSocket)
         uv.status = StatusClosed
         uv.handle = C_NULL
     end
-    iolock_end(tcp)
+    iolock_end(uv)
     nothing
 end
 
 function Base.start_reading(stream::TCPSocket)
-    iolock_begin(tcp)
+    iolock_begin(stream)
     if stream.status == StatusOpen
         if !isreadable(stream)
             error("tried to read a stream that is not readable")
@@ -1088,35 +1088,35 @@ function Base.start_reading(stream::TCPSocket)
     else
         ret = Int32(-1)
     end
-    iolock_end(tcp)
+    iolock_end(stream)
     return ret
 end
 
 
 if Sys.iswindows()
     function Base.stop_reading(stream::TCPSocket)
-        iolock_begin(tcp)
+        iolock_begin(stream)
         if stream.status == StatusActive
             stream.status = StatusOpen
             ccall(:uv_read_stop, Cint, (Ptr{Cvoid},), stream)
         end
-        iolock_end(tcp)
+        iolock_end(stream)
         nothing
     end
 else
     function Base.stop_reading(stream::TCPSocket)
-        iolock_begin(tcp)
+        iolock_begin(stream)
         if stream.status == StatusActive
             stream.status = StatusPaused
         end
-        iolock_end(tcp)
+        iolock_end(stream)
         nothing
     end
 end
 
 
 function Base.readbytes!(s::TCPSocket, a::Vector{UInt8}, nb::Int)
-    iolock_begin(tcp)
+    iolock_begin(s)
     sbuf = s.buffer
     @assert sbuf.seekable == false
     @assert sbuf.maxsize >= nb
@@ -1126,9 +1126,9 @@ function Base.readbytes!(s::TCPSocket, a::Vector{UInt8}, nb::Int)
             s.readerror === nothing || throw(s.readerror)
             isopen(s) || break
             s.status != StatusEOF || break
-            iolock_end(tcp)
+            iolock_end(s)
             wait_readnb(s, nb)
-            iolock_begin(tcp)
+            iolock_begin(s)
         end
     end
 
@@ -1150,21 +1150,21 @@ function Base.readbytes!(s::TCPSocket, a::Vector{UInt8}, nb::Int)
         end
         compact(newbuf)
     end
-    iolock_end(tcp)
+    iolock_end(s)
     return nread
 end
 
 function Base.read(stream::TCPSocket)
     wait_readnb(stream, typemax(Int))
-    iolock_begin(tcp)
+    iolock_begin(stream)
     bytes = take!(stream.buffer)
-    iolock_end(tcp)
+    iolock_end(stream)
     return bytes
 end
 
 
 function Base.unsafe_read(s::TCPSocket, p::Ptr{UInt8}, nb::UInt)
-    iolock_begin(tcp)
+    iolock_begin(s)
     sbuf = s.buffer
     @assert sbuf.seekable == false
     @assert sbuf.maxsize >= nb
@@ -1174,9 +1174,9 @@ function Base.unsafe_read(s::TCPSocket, p::Ptr{UInt8}, nb::UInt)
             s.readerror === nothing || throw(s.readerror)
             isopen(s) || throw(EOFError())
             s.status != StatusEOF || throw(EOFError())
-            iolock_end(tcp)
+            iolock_end(s)
             wait_readnb(s, nb)
-            iolock_begin(tcp)
+            iolock_begin(s)
         end
     end
 
@@ -1196,37 +1196,37 @@ function Base.unsafe_read(s::TCPSocket, p::Ptr{UInt8}, nb::UInt)
             s.buffer = sbuf
         end
     end
-    iolock_end(tcp)
+    iolock_end(s)
     nothing
 end
 
 
 function Base.read(this::TCPSocket, ::Type{UInt8})
-    iolock_begin(tcp)
+    iolock_begin(this)
     sbuf = this.buffer
     @assert sbuf.seekable == false
     while bytesavailable(sbuf) < 1
-        iolock_end(tcp)
+        iolock_end(this)
         eof(this) && throw(EOFError())
-        iolock_begin(tcp)
+        iolock_begin(this)
     end
     c = read(sbuf, UInt8)
-    iolock_end(tcp)
+    iolock_end(this)
     return c
 end
 
 function Base.readavailable(this::TCPSocket)
     wait_readnb(this, 1) # unlike the other `read` family of functions, this one doesn't guarantee error reporting
-    iolock_begin(tcp)
+    iolock_begin(this)
     buf = this.buffer
     @assert buf.seekable == false
     bytes = take!(buf)
-    iolock_end(tcp)
+    iolock_end(this)
     return bytes
 end
 
 function Base.readuntil(x::TCPSocket, c::UInt8; keep::Bool=false)
-    iolock_begin(tcp)
+    iolock_begin(x)
     buf = x.buffer
     @assert buf.seekable == false
     if !occursin(c, buf) # fast path checks first
@@ -1240,10 +1240,10 @@ function Base.readuntil(x::TCPSocket, c::UInt8; keep::Bool=false)
                     isopen(x) || break
                     x.status != StatusEOF || break
                     start_reading(x) # ensure we are reading
-                    iolock_end(tcp)
+                    iolock_end(x)
                     wait(x.cond)
                     unlock(x.cond)
-                    iolock_begin(tcp)
+                    iolock_begin(x)
                     lock(x.cond)
                 end
             finally
@@ -1256,7 +1256,7 @@ function Base.readuntil(x::TCPSocket, c::UInt8; keep::Bool=false)
         end
     end
     bytes = readuntil(buf, c, keep=keep)
-    iolock_end(tcp)
+    iolock_end(x)
     return bytes
 end
 
@@ -1266,7 +1266,7 @@ function Base.uv_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
     preserve_handle(ct)
     sigatomic_begin()
     uv_req_set_data(uvw, ct)
-    iolock_end(tcp)
+    iolock_end(s)
     status = try
         sigatomic_end()
         # wait for the last chunk to complete (or error)
@@ -1276,7 +1276,7 @@ function Base.uv_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
     finally
         # try-finally unwinds the sigatomic level, so need to repeat sigatomic_end
         sigatomic_end()
-        iolock_begin(tcp)
+        iolock_begin(s)
         ct.queue === nothing || list_deletefirst!(ct.queue, ct)
         if uv_req_data(uvw) != C_NULL
             # uvw is still alive,
@@ -1286,7 +1286,7 @@ function Base.uv_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
             # done with uvw
             Libc.free(uvw)
         end
-        iolock_end(tcp)
+        iolock_end(s)
         unpreserve_handle(ct)
     end
     if status < 0
@@ -1298,13 +1298,13 @@ end
 function Base.unsafe_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
     while true
         # try to add to the send buffer
-        iolock_begin(tcp)
+        iolock_begin(s)
         buf = s.sendbuf
         buf === nothing && break
         totb = bytesavailable(buf) + n
         if totb < buf.maxsize
             nb = unsafe_write(buf, p, n)
-            iolock_end(tcp)
+            iolock_end(s)
             return nb
         end
         bytesavailable(buf) == 0 && break
@@ -1317,7 +1317,7 @@ function Base.unsafe_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
 end
 
 function Base.flush(s::TCPSocket)
-    iolock_begin(tcp)
+    iolock_begin(s)
     buf = s.sendbuf
     if buf !== nothing
         if bytesavailable(buf) > 0
@@ -1332,22 +1332,22 @@ end
 
 function Base.buffer_writes(s::TCPSocket, bufsize)
     sendbuf = PipeBuffer(bufsize)
-    iolock_begin(tcp)
+    iolock_begin(s)
     s.sendbuf = sendbuf
-    iolock_end(tcp)
+    iolock_end(s)
     return s
 end
 
 function Base.write(s::TCPSocket, b::UInt8)
     buf = s.sendbuf
     if buf !== nothing
-        iolock_begin(tcp)
+        iolock_begin(s)
         if bytesavailable(buf) + 1 < buf.maxsize
             n = write(buf, b)
-            iolock_end(tcp)
+            iolock_end(s)
             return n
         end
-        iolock_end(tcp)
+        iolock_end(s)
     end
     return write(s, Ref{UInt8}(b))
 end
