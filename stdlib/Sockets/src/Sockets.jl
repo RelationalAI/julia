@@ -1325,7 +1325,7 @@ function Base.flush(s::TCPSocket)
             uv_write(s, arr)
             return
         end
-    end
+    end # TODO @vustef: eventloop() was a problem in `vs-182-eventloop-per-socket`, and similar.
     uv_write(s, Ptr{UInt8}(Base.eventloop()), UInt(0)) # zero write from a random pointer to flush current queue
     return
 end
