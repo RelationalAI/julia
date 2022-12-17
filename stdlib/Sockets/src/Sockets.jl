@@ -941,7 +941,7 @@ end
 
 # Overrides.
 
-function Base.wait_readnb(x::TCPSocket, nb::Int)
+function wait_readnb(x::TCPSocket, nb::Int)
     # fast path before iolock acquire
     bytesavailable(x.buffer) >= nb && return
     open = isopen(x) && x.status != StatusEOF # must precede readerror check
@@ -1094,7 +1094,7 @@ end
 
 
 if Sys.iswindows()
-    function Base.stop_reading(stream::TCPSocket)
+    function stop_reading(stream::TCPSocket)
         iolock_begin(stream)
         if stream.status == StatusActive
             stream.status = StatusOpen
@@ -1104,7 +1104,7 @@ if Sys.iswindows()
         nothing
     end
 else
-    function Base.stop_reading(stream::TCPSocket)
+    function stop_reading(stream::TCPSocket)
         iolock_begin(stream)
         if stream.status == StatusActive
             stream.status = StatusPaused
