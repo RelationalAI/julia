@@ -165,13 +165,13 @@ jl_value_t **const*const get_tags(void) {
         INSERT_TAG(jl_int64_type);
         INSERT_TAG(jl_bool_type);
         INSERT_TAG(jl_uint8_type);
+        INSERT_TAG(jl_uint16_type);
         INSERT_TAG(jl_uint32_type);
         INSERT_TAG(jl_uint64_type);
         INSERT_TAG(jl_char_type);
         INSERT_TAG(jl_weakref_type);
         INSERT_TAG(jl_int8_type);
         INSERT_TAG(jl_int16_type);
-        INSERT_TAG(jl_uint16_type);
         INSERT_TAG(jl_float16_type);
         INSERT_TAG(jl_float32_type);
         INSERT_TAG(jl_float64_type);
@@ -1338,7 +1338,7 @@ static inline uintptr_t get_item_for_reloc(jl_serializer_state *s, uintptr_t bas
         assert(offset < deser_sym.len && deser_sym.items[offset] && "corrupt relocation item id");
         return (uintptr_t)deser_sym.items[offset];
     case BindingRef:
-        return jl_buff_tag | GC_OLD_MARKED;
+        return jl_buff_tag | GC_OLD;
     case TagRef:
         if (offset == 0)
             return (uintptr_t)s->ptls->root_task;
@@ -2168,7 +2168,7 @@ static void jl_restore_system_image_from_stream(ios_t *f) JL_GC_DISABLED
     jl_gc_set_permalloc_region((void*)sysimg_base, (void*)(sysimg_base + sysimg.size));
 
     s.s = &sysimg;
-    jl_read_relocations(&s, GC_OLD_MARKED); // gctags
+    jl_read_relocations(&s, GC_OLD); // gctags
     size_t sizeof_tags = ios_pos(&relocs);
     (void)sizeof_tags;
     jl_read_relocations(&s, 0); // general relocs

@@ -272,4 +272,16 @@ end
     @test only(node.down).first == lidict[8]
 end
 
+@testset "HeapSnapshot" begin
+    fname = read(`$(Base.julia_cmd()) --startup-file=no -e "using Profile; print(Profile.take_heap_snapshot())"`, String)
+
+    @test isfile(fname)
+
+    open(fname) do fs
+        @test readline(fs) != ""
+    end
+
+    rm(fname)
+end
+
 include("allocs.jl")

@@ -976,6 +976,29 @@ void gc_time_sweep_pause(uint64_t gc_end_t, int64_t actual_allocd,
                    jl_ns2ms(gc_postmark_end - gc_premark_end),
                    sweep_full ? "full" : "quick", -gc_num.allocd / 1024);
 }
+
+void gc_time_summary(int sweep_full, uint64_t start, uint64_t end,
+                     uint64_t freed, uint64_t live, uint64_t interval,
+                     uint64_t pause, uint64_t ttsp, uint64_t mark,
+                     uint64_t sweep)
+{
+    if (sweep_full > 0)
+        jl_safe_printf("TS: %" PRIu64 " Major collection: estimate freed = %" PRIu64
+                       " live = %" PRIu64 "m new interval = %" PRIu64
+                       "m time = %" PRIu64 "ms ttsp = %" PRIu64 "us mark time = %"
+                       PRIu64 "ms sweep time = %" PRIu64 "ms \n",
+                       end, freed, live/1024/1024,
+                       interval/1024/1024, pause/1000000, ttsp,
+                       mark/1000000,sweep/1000000);
+    else
+        jl_safe_printf("TS: %" PRIu64 " Minor collection: estimate freed = %" PRIu64
+                       " live = %" PRIu64 "m new interval = %" PRIu64 "m pause time = %"
+                       PRIu64 "ms ttsp = %" PRIu64 "us mark time = %" PRIu64
+                       "ms sweep time = %" PRIu64 "ms \n",
+                       end, freed, live/1024/1024,
+                       interval/1024/1024, pause/1000000, ttsp,
+                       mark/1000000,sweep/1000000);
+}
 #endif
 
 void jl_gc_debug_init(void)
@@ -1204,20 +1227,17 @@ void gc_count_pool(void)
     jl_safe_printf("************************\n");
 }
 
-int gc_slot_to_fieldidx(void *obj, void *slot)
+int gc_slot_to_fieldidx(void *obj, void *slot, jl_datatype_t *vt) JL_NOTSAFEPOINT
 {
-    jl_datatype_t *vt = (jl_datatype_t*)jl_typeof(obj);
     int nf = (int)jl_datatype_nfields(vt);
-    for (int i = 0; i < nf; i++) {
-        void *fieldaddr = (char*)obj + jl_field_offset(vt, i);
-        if (fieldaddr >= slot) {
-            return i;
-        }
+    for (int i = 1; i < nf; i++) {
+        if (slot < (void*)((char*)obj + jl_field_offset(vt, i)))
+            return i - 1;
     }
-    return -1;
+    return nf - 1;
 }
 
-int gc_slot_to_arrayidx(void *obj, void *_slot)
+int gc_slot_to_arrayidx(void *obj, void *_slot) JL_NOTSAFEPOINT
 {
     char *slot = (char*)_slot;
     jl_datatype_t *vt = (jl_datatype_t*)jl_typeof(obj);
@@ -1235,8 +1255,6 @@ int gc_slot_to_arrayidx(void *obj, void *_slot)
     }
     else if (vt->name == jl_array_typename) {
         jl_array_t *a = (jl_array_t*)obj;
-        if (!a->flags.ptrarray)
-            return -1;
         start = (char*)a->data;
         len = jl_array_len(a);
         elsize = a->elsize;
