@@ -45,7 +45,8 @@ using Base: LibuvStream, LibuvServer, PipeEndpoint, @handle_as, uv_error, associ
     UV_EAI_BADHINTS, UV_EAI_CANCELED, UV_EAI_FAIL,
     UV_EAI_FAMILY, UV_EAI_NODATA, UV_EAI_NONAME,
     UV_EAI_OVERFLOW, UV_EAI_PROTOCOL, UV_EAI_SERVICE,
-    UV_EAI_SOCKTYPE, UV_EAI_MEMORY, StatusEOF, StatusPaused
+    UV_EAI_SOCKTYPE, UV_EAI_MEMORY, StatusEOF, StatusPaused,
+    SZ_UNBUFFERED_IO
 
 include("IPAddr.jl")
 include("addrinfo.jl")
