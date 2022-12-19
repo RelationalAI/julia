@@ -67,7 +67,7 @@ mutable struct TCPSocket <: LibuvStream
     sendbuf::Union{IOBuffer, Nothing}
     lock::ReentrantLock # advisory lock
     throttle::Int
-    socklock::Ptr{Cvoid}
+    sem::Base.Semaphore
 
     function TCPSocket(handle::Ptr{Cvoid}, status)
         tcp = new(
@@ -79,7 +79,7 @@ mutable struct TCPSocket <: LibuvStream
                 nothing,
                 ReentrantLock(),
                 Base.DEFAULT_READ_BUFFER_SZ,
-                Ptr{Nothing}())
+                Base.Semaphore(1))
         associate_julia_struct(tcp.handle, tcp)
         finalizer(uvfinalize, tcp)
         return tcp
@@ -87,31 +87,19 @@ mutable struct TCPSocket <: LibuvStream
 end
 
 function Base.iolock_begin(s::TCPSocket)
-    ccall(:jl_socklock_begin, Cvoid, (Ptr{Cvoid},), s.socklock)
+    Base.acquire(s.sem)
     iolock_begin()
 end
 
 function Base.iolock_end(s::TCPSocket)
     iolock_end()
-    ccall(:jl_socklock_end, Cvoid, (Ptr{Cvoid},), s.socklock)
-end
-
-function init_socklock(socklock::Ptr{Cvoid})
-    ccall(:jl_init_socklock, Cvoid, (Ptr{Cvoid},), socklock)
-end
-
-function sizeof_socklock()
-   return  ccall(:jl_sizeof_socklock, Int32, ())
+    Base.release(s.sem)
 end
 
 # kw arg "delay": if true, libuv delays creation of the socket fd till the first bind call
 function TCPSocket(; delay=true)
     tcp = TCPSocket(Libc.malloc(Base._sizeof_uv_tcp), StatusUninit)
     af_spec = delay ? 0 : 2   # AF_UNSPEC is 0, AF_INET is 2
-
-    socklock = Libc.malloc(sizeof_socklock())
-    init_socklock(socklock)
-    tcp.socklock = socklock
 
     iolock_begin(tcp)
     err = ccall(:uv_tcp_init_ex, Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Cuint),
