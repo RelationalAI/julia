@@ -80,10 +80,19 @@ JL_DLLEXPORT void jl_iolock_end(void)
     JL_UV_UNLOCK();
 }
 
+// static int g_unlock_cnt = 0;
+
 static void locker_cb(uv_loop_t* loop, uv_looplock_mode mode) {
   if(mode == UV_LOOP_LOCK)
     jl_iolock_begin();
   else {
+    // ++g_unlock_cnt;
+    // if (g_unlock_cnt % 100 == 0) {
+    //     fprintf(stderr,"unlock count: %d\n", g_unlock_cnt);
+    // }
+    // if (getenv("PRINT_LOG") && jl_uv_mutex.count > 1) {
+    //     fprintf(stderr,"current lock count: %d\n", jl_uv_mutex.count);
+    // }
     jl_iolock_end();
   }
 }
@@ -535,10 +544,10 @@ JL_DLLEXPORT int jl_uv_write(uv_stream_t *stream, const char *data, size_t n,
     uv_buf_t buf[1];
     buf[0].base = (char*)data;
     buf[0].len = n;
-    JL_UV_LOCK();
+    //JL_UV_LOCK();
     JL_SIGATOMIC_BEGIN();
     int err = uv_write(uvw, stream, buf, 1, writecb);
-    JL_UV_UNLOCK();
+    //JL_UV_UNLOCK();
     JL_SIGATOMIC_END();
     return err;
 }
