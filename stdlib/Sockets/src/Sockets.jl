@@ -86,13 +86,17 @@ mutable struct TCPSocket <: LibuvStream
     end
 end
 
-function Base.iolock_begin(s::TCPSocket)
+function Base.iolock_begin(s::TCPSocket, gbl = true)
     Base.acquire(s.sem)
-    iolock_begin()
+    if gbl
+        iolock_begin()
+    end
 end
 
-function Base.iolock_end(s::TCPSocket)
-    iolock_end()
+function Base.iolock_end(s::TCPSocket, gbl = true)
+    if gbl
+        iolock_end()
+    end
     Base.release(s.sem)
 end
 
@@ -1289,20 +1293,22 @@ end
 function Base.unsafe_write(s::TCPSocket, p::Ptr{UInt8}, n::UInt)
     while true
         # try to add to the send buffer
-        iolock_begin(s)
+        iolock_begin(s, false)
         buf = s.sendbuf
         buf === nothing && break
         totb = bytesavailable(buf) + n
         if totb < buf.maxsize
             nb = unsafe_write(buf, p, n)
-            iolock_end(s)
+            iolock_end(s, false)
             return nb
         end
         bytesavailable(buf) == 0 && break
         # perform flush(s)
         arr = take!(buf)
+        iolock_begin()
         uv_write(s, arr)
     end
+    iolock_begin()
     # perform the output to the kernel
     return uv_write(s, p, n)
 end
