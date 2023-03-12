@@ -782,7 +782,11 @@ static void *signal_listener(void *arg)
             critical = 0;
         }
 
-        critical |= (sig == SIGTERM);
+        // When Kubernetes attempts to gracefully delete a pod, it sends SIGTERM. If Julia
+        // is already shutting down via an alternate method (eg. an HTTP handler), but
+        // SIGTERM is received, then Julia ungracefully terminates itself. Since Julia does
+        // not offer a way to handle signals, we simply ignore SIGTERM.
+        // critical |= (sig == SIGTERM);
         critical |= (sig == SIGABRT);
         critical |= (sig == SIGQUIT);
 #ifdef SIGINFO
