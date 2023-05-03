@@ -604,10 +604,10 @@ static void gc_sweep_foreign_objs(void)
 static int64_t last_gc_total_bytes = 0;
 
 #ifdef _P64
-#define default_collect_interval (5600*1024*sizeof(void*))
+static size_t default_collect_interval = (5600*1024*sizeof(void*));
 static size_t max_collect_interval = 1250000000UL;
 #else
-#define default_collect_interval (3200*1024*sizeof(void*))
+static size_t default_collect_interval = (3200*1024*sizeof(void*));
 static size_t max_collect_interval =  500000000UL;
 #endif
 
@@ -1094,6 +1094,54 @@ void jl_gc_count_allocd(size_t sz) JL_NOTSAFEPOINT
     jl_ptls_t ptls = jl_current_task->ptls;
     jl_atomic_store_relaxed(&ptls->gc_num.allocd,
         jl_atomic_load_relaxed(&ptls->gc_num.allocd) + sz);
+}
+
+JL_DLLEXPORT void jl_gc_set_default_collect_interval(size_t collect_interval) JL_NOTSAFEPOINT {
+    default_collect_interval = collect_interval;
+}
+
+JL_DLLEXPORT size_t jl_gc_default_collect_interval() JL_NOTSAFEPOINT {
+    return default_collect_interval;
+}
+
+JL_DLLEXPORT void jl_gc_allocd_external(size_t sz_delta) JL_NOTSAFEPOINT
+{
+    // External memory is divided up for accounting among all threads; this way the
+    // per-thread quantity is kept balanced to help avoid full GC thrashing if only one
+    // thread goes over max_collect_interval.
+    int64_t per_tls_delta = sz_delta / jl_n_threads;
+    int64_t remainder = sz_delta % jl_n_threads;
+
+    for (int i = 0; i < jl_n_threads; i++) {
+        jl_ptls_t ptls = jl_all_tls_states[i];
+        jl_atomic_store_relaxed(&ptls->gc_num.allocd,
+                                jl_atomic_load_relaxed(&ptls->gc_num.allocd) +
+                                    per_tls_delta);
+    }
+    // Stash the remainder in the 1st thread.
+    jl_ptls_t ptls = jl_all_tls_states[0];
+    jl_atomic_store_relaxed(&ptls->gc_num.allocd,
+                            jl_atomic_load_relaxed(&ptls->gc_num.allocd) + remainder);
+}
+
+JL_DLLEXPORT void jl_gc_freed_external(size_t sz_delta) JL_NOTSAFEPOINT
+{
+    // External memory is divided up for accounting among all threads; this way the
+    // per-thread quantity is kept balanced to help avoid full GC thrashing if only one
+    // thread goes over max_collect_interval.
+    int64_t per_tls_delta = sz_delta / jl_n_threads;
+    int64_t remainder = sz_delta % jl_n_threads;
+
+    for (int i = 0; i < jl_n_threads; i++) {
+        jl_ptls_t ptls = jl_all_tls_states[i];
+        jl_atomic_store_relaxed(&ptls->gc_num.freed,
+                                jl_atomic_load_relaxed(&ptls->gc_num.freed) +
+                                    per_tls_delta);
+    }
+    // Subtract the remainder from the 1st thread.
+    jl_ptls_t ptls = jl_all_tls_states[0];
+    jl_atomic_store_relaxed(&ptls->gc_num.freed,
+                            jl_atomic_load_relaxed(&ptls->gc_num.freed) + remainder);
 }
 
 static void combine_thread_gc_counts(jl_gc_num_t *dest) JL_NOTSAFEPOINT

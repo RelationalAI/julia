@@ -937,6 +937,15 @@ JL_DLLEXPORT void *jl_gc_managed_realloc(void *d, size_t sz, size_t oldsz,
                                          int isaligned, jl_value_t *owner);
 JL_DLLEXPORT void jl_gc_safepoint(void);
 
+JL_DLLEXPORT void jl_gc_set_default_collect_interval(size_t collect_interval) JL_NOTSAFEPOINT;
+JL_DLLEXPORT size_t jl_gc_default_collect_interval(void) JL_NOTSAFEPOINT;
+
+// Record accounting for memory that exists outside-of the Julia runtime, but which is
+// nevertheless part of the same process RSS and which should be accounted for when
+// calculating process memory pressure when triggering garbage collection.
+JL_DLLEXPORT void jl_gc_allocd_external(size_t sz_delta) JL_NOTSAFEPOINT;
+JL_DLLEXPORT void jl_gc_freed_external(size_t sz_delta) JL_NOTSAFEPOINT;
+
 // object accessors -----------------------------------------------------------
 
 #define jl_svec_len(t)              (((jl_svec_t*)(t))->length)
