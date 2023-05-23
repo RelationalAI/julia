@@ -495,6 +495,9 @@ static void schedule_all_finalizers(arraylist_t *flist) JL_NOTSAFEPOINT
 
 void jl_gc_run_all_finalizers(jl_task_t *ct)
 {
+    // this is called from `jl_atexit_hook`; threads could still be running
+    // so we have to guard the finalizers' lists
+    JL_LOCK_NOGC(&finalizers_lock);
     schedule_all_finalizers(&finalizer_list_marked);
     // This could be run before we had a chance to setup all threads
     for (int i = 0;i < jl_n_threads;i++) {
@@ -502,6 +505,8 @@ void jl_gc_run_all_finalizers(jl_task_t *ct)
         if (ptls2)
             schedule_all_finalizers(&ptls2->finalizers);
     }
+    // unlock here because `run_finalizers` locks this
+    JL_UNLOCK_NOGC(&finalizers_lock);
     run_finalizers(ct);
 }
 
