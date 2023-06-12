@@ -9,6 +9,8 @@
 #ifndef JL_GC_H
 #define JL_GC_H
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -381,7 +383,19 @@ typedef struct {
     int ub;
 } pagetable_t;
 
-#ifdef __clang_gcanalyzer__
+typedef struct {
+    _Atomic(size_t) bytes_mapped;
+    _Atomic(size_t) bytes_freed;
+    _Atomic(size_t) bytes_allocd;
+    _Atomic(size_t) bytes_decomitted;
+    _Atomic(size_t) bytes_mallocd;
+    _Atomic(size_t) malloc_bytes_freed;
+    _Atomic(size_t) pages_perm_allocd;
+    _Atomic(size_t) heap_size;
+    _Atomic(size_t) heap_target;
+} gc_heapstatus_t;
+
+#ifdef __clang_gcanalyzer__ /* clang may not have __builtin_ffs */
 unsigned ffs_u32(uint32_t bitvec) JL_NOTSAFEPOINT;
 #else
 STATIC_INLINE unsigned ffs_u32(uint32_t bitvec)
@@ -396,6 +410,7 @@ extern bigval_t *big_objects_marked;
 extern arraylist_t finalizer_list_marked;
 extern arraylist_t to_finalize;
 extern int64_t lazy_freed_pages;
+extern gc_heapstatus_t gc_heap_stats;
 
 STATIC_INLINE bigval_t *bigval_header(jl_taggedvalue_t *o) JL_NOTSAFEPOINT
 {
@@ -717,7 +732,7 @@ void gc_count_pool(void);
 size_t jl_array_nbytes(jl_array_t *a) JL_NOTSAFEPOINT;
 
 JL_DLLEXPORT void jl_enable_gc_logging(int enable);
-void _report_gc_finished(uint64_t pause, uint64_t freed, int full, int recollect) JL_NOTSAFEPOINT;
+void _report_gc_finished(uint64_t pause, uint64_t freed, int full, int recollect, int64_t live_bytes) JL_NOTSAFEPOINT;
 
 #ifdef __cplusplus
 }

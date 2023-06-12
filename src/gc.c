@@ -1,6 +1,7 @@
 // This file is a part of Julia. License is MIT: https://julialang.org/license
 
 #include "gc.h"
+#include "julia_atomics.h"
 #include "julia_gcext.h"
 #include "julia_assert.h"
 #ifdef __GLIBC__
@@ -171,6 +172,13 @@ static _Atomic(int) support_conservative_marking = 0;
 
 jl_gc_num_t gc_num = {0};
 static size_t last_long_collect_interval;
+gc_heapstatus_t gc_heap_stats = {0};
+int next_sweep_full = 0;
+const uint64_t _jl_buff_tag[3] = {0x4eadc0004eadc000ull, 0x4eadc0004eadc000ull, 0x4eadc0004eadc000ull}; // aka 0xHEADER00
+JL_DLLEXPORT uintptr_t jl_get_buff_tag(void)
+{
+    return jl_buff_tag;
+}
 
 pagetable_t memory_map;
 
@@ -230,6 +238,8 @@ STATIC_INLINE void jl_free_aligned(void *p) JL_NOTSAFEPOINT
 #else
 STATIC_INLINE void *jl_malloc_aligned(size_t sz, size_t align)
 {
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_mallocd, sz);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.heap_size, sz);
 #if defined(_P64) || defined(__APPLE__)
     if (align <= 16)
         return malloc(sz);
@@ -242,6 +252,9 @@ STATIC_INLINE void *jl_malloc_aligned(size_t sz, size_t align)
 STATIC_INLINE void *jl_realloc_aligned(void *d, size_t sz, size_t oldsz,
                                        size_t align)
 {
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_mallocd, sz);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.malloc_bytes_freed, oldsz);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.heap_size, sz-oldsz);
 #if defined(_P64) || defined(__APPLE__)
     if (align <= 16)
         return realloc(d, sz);
@@ -609,11 +622,19 @@ static void gc_sweep_foreign_objs(void)
 static int64_t last_gc_total_bytes = 0;
 
 #ifdef _P64
-#define default_collect_interval (5600*1024*sizeof(void*))
-static size_t max_collect_interval = 1250000000UL;
+typedef uint64_t memsize_t;
+static const size_t default_collect_interval = 5600 * 1024 * sizeof(void*);
+
+static size_t total_mem;
+// We expose this to the user/ci as jl_gc_set_max_memory
+static memsize_t max_total_memory = (memsize_t) 2 * 1024 * 1024 * 1024 * 1024 * 1024;
 #else
-#define default_collect_interval (3200*1024*sizeof(void*))
-static size_t max_collect_interval =  500000000UL;
+typedef uint32_t memsize_t;
+static const size_t default_collect_interval = 3200 * 1024 * sizeof(void*);
+// Work really hard to stay within 2GB
+// Alternative is to risk running out of address space
+// on 32 bit architectures.
+static memsize_t max_total_memory = (memsize_t)  1024 * 1024 * 1024; // The new heuristics use all the heap, which makes it run out
 #endif
 
 // global variables for GC stats
@@ -906,7 +927,7 @@ void jl_gc_force_mark_old(jl_ptls_t ptls, jl_value_t *v) JL_NOTSAFEPOINT
 
 static inline void maybe_collect(jl_ptls_t ptls)
 {
-    if (jl_atomic_load_relaxed(&ptls->gc_num.allocd) >= 0 || jl_gc_debug_check_other()) {
+    if (jl_atomic_load_relaxed(&gc_heap_stats.heap_size) >= jl_atomic_load_relaxed(&gc_heap_stats.heap_target) || jl_gc_debug_check_other()) {
         jl_gc_collect(JL_GC_AUTO);
     }
     else {
@@ -1044,6 +1065,8 @@ static bigval_t **sweep_big_list(int sweep_full, bigval_t **pv) JL_NOTSAFEPOINT
             if (nxt)
                 nxt->prev = pv;
             gc_num.freed += v->sz&~3;
+            jl_atomic_fetch_add_relaxed(&gc_heap_stats.malloc_bytes_freed, v->sz&~3);
+            jl_atomic_fetch_add_relaxed(&gc_heap_stats.heap_size, -(v->sz&~3));
 #ifdef MEMDEBUG
             memset(v, 0xbb, v->sz&~3);
 #endif
@@ -1159,6 +1182,8 @@ static void jl_gc_free_array(jl_array_t *a) JL_NOTSAFEPOINT
             jl_free_aligned(d);
         else
             free(d);
+        jl_atomic_fetch_add_relaxed(&gc_heap_stats.malloc_bytes_freed, jl_array_nbytes(a));
+        jl_atomic_fetch_add_relaxed(&gc_heap_stats.heap_size, -jl_array_nbytes(a));
         gc_num.freed += jl_array_nbytes(a);
         gc_num.freecall++;
     }
@@ -3172,7 +3197,6 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     uint64_t mark_time = end_mark_time - start_mark_time;
     gc_num.mark_time = mark_time;
     gc_num.total_mark_time += mark_time;
-    int64_t actual_allocd = gc_num.since_sweep;
     // marking is over
 
     // 4. check for objects to finalize
@@ -3213,12 +3237,7 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     // Flush everything in mark cache
     gc_sync_all_caches_nolock(ptls);
 
-    int64_t live_sz_ub = live_bytes + actual_allocd;
-    int64_t live_sz_est = scanned_bytes + perm_scanned_bytes;
-    int64_t estimate_freed = live_sz_ub - live_sz_est;
-
     gc_verify(ptls);
-
     gc_stats_all_pool();
     gc_stats_big_obj();
     objprofile_printall();
@@ -3227,28 +3246,23 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     if (!prev_sweep_full)
         promoted_bytes += perm_scanned_bytes - last_perm_scanned_bytes;
     // 5. next collection decision
-    int not_freed_enough = (collection == JL_GC_AUTO) && estimate_freed < (7*(actual_allocd/10));
-    int nptr = 0;
-    for (int i = 0;i < jl_n_threads;i++)
-        nptr += jl_all_tls_states[i]->heap.remset_nptr;
-
-    // many pointers in the intergen frontier => "quick" mark is not quick
-    int large_frontier = nptr*sizeof(void*) >= default_collect_interval;
-    int sweep_full = 0;
+    int remset_nptr = 0;
+    int sweep_full = next_sweep_full;
     int recollect = 0;
+    assert(gc_n_threads);
+    for (int i = 0; i < jl_n_threads; i++) {
+        jl_ptls_t ptls2 = jl_all_tls_states[i];
+        if (ptls2 != NULL)
+            remset_nptr += ptls2->heap.remset_nptr;
+    }
+    (void)remset_nptr; //Use this information for something?
 
-    // update heuristics only if this GC was automatically triggered
-    if (collection == JL_GC_AUTO) {
-        if (not_freed_enough) {
-            gc_num.interval = gc_num.interval * 2;
-        }
-        if (large_frontier) {
-            sweep_full = 1;
-        }
-        if (gc_num.interval > max_collect_interval) {
-            sweep_full = 1;
-            gc_num.interval = max_collect_interval;
-        }
+
+    // If the live data outgrows the suggested max_total_memory
+    // we keep going with minimum intervals and full gcs until
+    // we either free some space or get an OOM error.
+    if (live_bytes > max_total_memory) {
+        sweep_full = 1;
     }
     if (gc_sweep_always_full) {
         sweep_full = 1;
@@ -3276,6 +3290,14 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     gc_sweep_pool(sweep_full);
     if (sweep_full)
         gc_sweep_perm_alloc();
+
+    size_t heap_size = jl_atomic_load_relaxed(&gc_heap_stats.heap_size);
+    if (heap_size > max_total_memory*0.8)
+        next_sweep_full = 1;
+    else
+        next_sweep_full = 0;
+    size_t new_heap_target = 2 * heap_size > max_total_memory ? max_total_memory : 2 * heap_size;
+    jl_atomic_store_relaxed(&gc_heap_stats.heap_target, new_heap_target);
     JL_PROBE_GC_SWEEP_END();
 
     uint64_t gc_end_time = jl_hrtime();
@@ -3319,29 +3341,19 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     }
 #endif
 
-
-    _report_gc_finished(pause, gc_num.freed, sweep_full, recollect);
-
-    gc_final_pause_end(t0, gc_end_time);
-    gc_time_sweep_pause(gc_end_time, actual_allocd, live_bytes,
-                        estimate_freed, sweep_full);
-    gc_num.full_sweep += sweep_full;
+    _report_gc_finished(pause, gc_num.freed, sweep_full, recollect, live_bytes);
     uint64_t max_memory = last_live_bytes + gc_num.allocd;
     if (max_memory > gc_num.max_memory) {
         gc_num.max_memory = max_memory;
     }
+    gc_final_pause_end(gc_start_time, gc_end_time);
+    gc_time_sweep_pause(gc_end_time, allocd, live_bytes,
+                        estimate_freed, sweep_full);
+    gc_num.full_sweep += sweep_full;
 
     gc_num.allocd = 0;
     last_live_bytes = live_bytes;
     live_bytes += -gc_num.freed + gc_num.since_sweep;
-
-    if (collection == JL_GC_AUTO) {
-      // If the current interval is larger than half the live data decrease the interval
-      int64_t half = live_bytes/2;
-      if (gc_num.interval > half) gc_num.interval = half;
-      // But never go below default
-      if (gc_num.interval < default_collect_interval) gc_num.interval = default_collect_interval;
-    }
 
     gc_time_summary(sweep_full, t_start, gc_end_time, gc_num.freed,
                     live_bytes, gc_num.interval, pause,
@@ -3510,7 +3522,7 @@ void jl_gc_init(void)
 
     arraylist_new(&finalizer_list_marked, 0);
     arraylist_new(&to_finalize, 0);
-
+    jl_atomic_store_relaxed(&gc_heap_stats.heap_target, default_collect_interval);
     gc_num.interval = default_collect_interval;
     last_long_collect_interval = default_collect_interval;
     gc_num.allocd = 0;
@@ -3519,13 +3531,16 @@ void jl_gc_init(void)
 
 #ifdef _P64
     // on a big memory machine, set max_collect_interval to totalmem / nthreads / 2
-    uint64_t total_mem = uv_get_total_memory();
+    total_mem = uv_get_total_memory();
     uint64_t constrained_mem = uv_get_constrained_memory();
     if (constrained_mem != 0)
         total_mem = constrained_mem;
-    size_t maxmem = total_mem / jl_n_threads / 2;
-    if (maxmem > max_collect_interval)
-        max_collect_interval = maxmem;
+    double percent;
+    if (total_mem < 128e9)
+        percent = total_mem * 2.34375e-12 + 0.3; // 60% at 0 gigs and 90% at 128 to not
+    else                                         // overcommit too much on memory contrained devices
+        percent = 0.6;
+    max_total_memory = total_mem * percent;
 #endif
     jl_gc_mark_sp_t sp = {NULL, NULL, NULL, NULL};
     gc_mark_loop(NULL, sp);
@@ -3801,6 +3816,8 @@ static void *gc_perm_alloc_large(size_t sz, int zero, unsigned align, unsigned o
 #ifdef _OS_WINDOWS_
     SetLastError(last_error);
 #endif
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_allocd,sz);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.heap_size,sz);
     errno = last_errno;
     jl_may_leak(base);
     unsigned diff = (offset - base) % align;
@@ -3843,6 +3860,7 @@ void *jl_gc_perm_alloc_nolock(size_t sz, int zero, unsigned align, unsigned offs
     errno = last_errno;
     if (__unlikely(pool == MAP_FAILED))
         return NULL;
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.pages_perm_allocd, 1);
 #endif
     gc_perm_pool = (uintptr_t)pool;
     gc_perm_end = gc_perm_pool + GC_PERM_POOL_SIZE;

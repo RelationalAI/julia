@@ -38,30 +38,9 @@ Language changes
 Compiler/Runtime improvements
 -----------------------------
 
-* Bootstrapping time has been improved by about 25% ([#41794]).
-* The LLVM-based compiler has been separated from the run-time library into a new library,
-  `libjulia-codegen`. It is loaded by default, so normal usage should see no changes.
-  In deployments that do not need the compiler (e.g. system images where all needed code
-  is precompiled), this library (and its LLVM dependency) can simply be excluded ([#41936]).
-* Conditional type constraints are now be forwarded interprocedurally (i.e. propagated from caller to callee).
-  This allows inference to understand e.g. `Base.ifelse(isa(x, Int), x, 0)` returns `::Int`-value
-  even if the type of `x` is not known ([#42529]).
-* Julia-level SROA (Scalar Replacement of Aggregates) has been improved: allowing elimination of
-  `getfield` calls with constant global fields ([#42355]), enabling elimination of mutable structs with
-  uninitialized fields ([#43208]), improving performance ([#43232]), and handling more nested `getfield`
-  calls ([#43239]).
-* Abstract call sites can now be inlined or statically resolved as long as the call site has a single
-  matching method ([#43113]).
-* Inference now tracks various effects such as side-effectful-ness and nothrow-ness on a per-specialization basis.
-  Code heavily dependent on constant propagation should see significant compile-time performance improvements and
-  certain cases (e.g. calls to uninlinable functions that are nevertheless effect free) should see runtime performance
-  improvements. Effects may be overwritten manually with the `Base.@assume_effects` macro ([#43852]).
-* Precompilation (with explicit `precompile` directives or representative workloads) now saves more type-inferred code,
-  resulting in reduced time-to-first task for packages that use precompilation.  This change also eliminates the
-  runtime performance degradation occasionally triggered by precompilation on older Julia versions. More specifically,
-  any newly-inferred method/type combinations needed by your package--regardless of where those methods were
-  defined--can now be cached in the precompile file, as long as they are inferrably called by a method owned by
-  your package ([#43990]).
+* The `@pure` macro is now deprecated. Use `Base.@assume_effects :foldable` instead ([#48682]).
+* The mark phase of the Garbage Collector is now multi-threaded ([#48600]).
+* Updated GC heuristics to count allocated pages instead of individual objects ([#50144]).
 
 Command-line option changes
 ---------------------------

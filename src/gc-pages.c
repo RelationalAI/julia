@@ -79,6 +79,7 @@ static char *jl_gc_try_alloc_pages(int pg_cnt) JL_NOTSAFEPOINT
         // round data pointer up to the nearest gc_page_data-aligned
         // boundary if mmap didn't already do so.
         mem = (char*)gc_page_data(mem + GC_PAGE_SZ - 1);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_mapped, pages_sz);
     return mem;
 }
 
@@ -284,6 +285,8 @@ have_free_page:
     errno = last_errno;
     current_pg_count++;
     gc_final_count_page(current_pg_count);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_allocd, GC_PAGE_SZ);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.heap_size, GC_PAGE_SZ);
     uv_mutex_unlock(&gc_perm_lock);
     return info.meta;
 }
@@ -334,7 +337,7 @@ void jl_gc_free_page(void *p) JL_NOTSAFEPOINT
 #else
     madvise(p, decommit_size, MADV_DONTNEED);
 #endif
-
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_decomitted, GC_PAGE_SZ);
 no_decommit:
     // new pages are now available starting at max of lb and pagetable_i32
     if (memory_map.lb > info.pagetable_i32)
@@ -344,6 +347,8 @@ no_decommit:
     if (info.pagetable0->lb > info.pagetable0_i32)
         info.pagetable0->lb = info.pagetable0_i32;
     current_pg_count--;
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_freed, GC_PAGE_SZ);
+    jl_atomic_fetch_add_relaxed(&gc_heap_stats.heap_size, -GC_PAGE_SZ);
 }
 
 #ifdef __cplusplus

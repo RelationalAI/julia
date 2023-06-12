@@ -428,7 +428,7 @@ function generate_precompile_statements()
     print("Total ─────── "); Base.time_print(tot_time); println()
     print("Generation ── "); Base.time_print(gen_time);     print(" "); show(IOContext(stdout, :compact=>true), gen_time / tot_time * 100); println("%")
     print("Execution ─── "); Base.time_print(include_time); print(" "); show(IOContext(stdout, :compact=>true), include_time / tot_time * 100); println("%")
-
+    GC.gc(true)
     return
 end
 
