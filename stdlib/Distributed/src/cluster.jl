@@ -1331,6 +1331,14 @@ function get_threads_spec(opts)
     end
 end
 
+function get_gcthreads_spec(opts)
+    if opts.nmarkthreads > 0 || opts.nsweepthreads > 0
+        `--gcthreads=$(opts.nmarkthreads),$(opts.nsweepthreads)`
+    else
+        ``
+    end
+end
+
 # Starts workers specified by (-n|--procs) and --machine-file command line options
 function process_opts(opts)
     # startup worker.
@@ -1345,8 +1353,9 @@ function process_opts(opts)
     end
 
     # Propagate --threads to workers
-    threads = opts.nthreads > 0 ? `--threads=$(opts.nthreads)` : ``
-    gcthreads = opts.ngcthreads > 0 ? `--gcthreads=$(opts.ngcthreads)` : ``
+    threads = get_threads_spec(opts)
+    # Propagate --gcthreads to workers
+    gcthreads = get_gcthreads_spec(opts)
 
     exeflags = `$threads $gcthreads`
 

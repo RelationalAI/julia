@@ -128,6 +128,14 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
 #endif
     jl_gc_pagemeta_t *meta = NULL;
 
+    // try to get page from `pool_lazily_freed`
+    meta = pop_lf_page_metadata_back(&global_page_pool_lazily_freed);
+    if (meta != NULL) {
+        gc_alloc_map_set(meta->data, GC_PAGE_ALLOCATED);
+        // page is already mapped
+        return meta;
+    }
+
     // try to get page from `pool_clean`
     meta = pop_lf_page_metadata_back(&global_page_pool_clean);
     if (meta != NULL) {
@@ -143,7 +151,7 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
     }
 
     uv_mutex_lock(&gc_perm_lock);
-    // another thread may have allocated a large block while we're waiting...
+    // another thread may have allocated a large block while we were waiting...
     meta = pop_lf_page_metadata_back(&global_page_pool_clean);
     if (meta != NULL) {
         uv_mutex_unlock(&gc_perm_lock);
