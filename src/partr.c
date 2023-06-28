@@ -113,13 +113,13 @@ extern uv_cond_t gc_threads_cond;
 extern _Atomic(int) gc_n_threads_marking;
 extern void gc_mark_loop_parallel(jl_ptls_t ptls, int master);
 
-static int may_mark(void) JL_NOTSAFEPOINT
+static inline int may_mark(void) JL_NOTSAFEPOINT
 {
     return (jl_atomic_load(&gc_n_threads_marking) > 0);
 }
 
-// gc thread function
-void jl_gc_threadfun(void *arg)
+// gc thread mark function
+void jl_gc_mark_threadfun(void *arg)
 {
     jl_threadarg_t *targ = (jl_threadarg_t*)arg;
 
@@ -140,6 +140,34 @@ void jl_gc_threadfun(void *arg)
         }
         uv_mutex_unlock(&gc_threads_lock);
         gc_mark_loop_parallel(ptls, 0);
+    }
+}
+
+// gc thread sweep function
+void jl_gc_sweep_threadfun(void *arg)
+{
+    jl_threadarg_t *targ = (jl_threadarg_t*)arg;
+
+    // initialize this thread (set tid and create heap)
+    jl_ptls_t ptls = jl_init_threadtls(targ->tid);
+
+    // wait for all threads
+    jl_gc_state_set(ptls, JL_GC_STATE_WAITING, 0);
+    uv_barrier_wait(targ->barrier);
+
+    // free the thread argument here
+    free(targ);
+
+    while (1) {
+        uv_sem_wait(&gc_sweep_assists_needed);
+        while (1) {
+            jl_gc_pagemeta_t *pg = pop_lf_page_metadata_back(&global_page_pool_lazily_freed);
+            if (pg == NULL) {
+                break;
+            }
+            jl_gc_free_page(pg);
+            push_lf_page_metadata_back(&global_page_pool_freed, pg);
+        }
     }
 }
 
