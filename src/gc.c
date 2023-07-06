@@ -3302,6 +3302,9 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     if (sweep_full) {
         gc_num.last_full_sweep = gc_end_time;
     }
+    else {
+        gc_num.last_incremental_sweep = gc_end_time;
+    }
 
     size_t heap_size = jl_atomic_load_relaxed(&gc_heap_stats.heap_size);
     double target_allocs = 0.0;
