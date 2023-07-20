@@ -378,7 +378,7 @@ function atexit(f::Function)
     end
 end
 
-function _atexit(exitcode::Cint)
+function _atexit()
     # Don't hold the lock around the iteration, just in case any other thread executing in
     # parallel tries to register a new atexit hook while this is running. We don't want to
     # block that thread from proceeding, and we can allow it to register its hook which we
