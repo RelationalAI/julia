@@ -519,7 +519,7 @@ static void ctx_switch(jl_task_t *lastt)
 
 JL_DLLEXPORT void jl_switch(void)
 {
-    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_p, 1);
+    //jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_p, 1);
     jl_task_t *ct = jl_current_task;
     jl_ptls_t ptls = ct->ptls;
     jl_task_t *t = ptls->next_task;
@@ -918,7 +918,7 @@ CFI_NORETURN
         jl_atomic_store_release(&pt->tid, -1);
 #endif
 
-    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_p, 1);
+    //jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_p, 1);
     ct->started = 1;
     JL_PROBE_RT_START_TASK(ct);
     if (jl_atomic_load_relaxed(&ct->_isexception)) {
@@ -944,7 +944,7 @@ CFI_NORETURN
 skip_pop_exception:;
     }
     ct->result = res;
-    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_m, 1);
+    //jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_m, 1);
     jl_gc_wb(ct, ct->result);
     jl_finish_task(ct);
     jl_gc_debug_critical_error();

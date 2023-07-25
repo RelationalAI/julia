@@ -635,6 +635,7 @@ function task_done_hook(t::Task)
     # Clear sigatomic before waiting
     sigatomic_end()
     try
+        ccall(:jl_tv_tasks_waiting_m_inc, Cvoid, ())   ## Kludge-
         wait() # this will not return
     catch e
         # If an InterruptException happens while blocked in the event loop, try handing
@@ -835,7 +836,10 @@ immediately yields to `t` before calling the scheduler.
 function yield(t::Task, @nospecialize(x=nothing))
     (t._state === task_state_runnable && t.queue === nothing) || error("yield: Task not runnable")
     t.result = x
-    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
+    # ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
+    # if hash(time()) % 1000 == 0
+    #     print("TASK-YIELD:\n$(sprint(Base.show_backtrace, Base.stacktrace()))\n\n\n")
+    # end
     enq_work(current_task())
     set_next_task(t)
     return try_yieldto(ensure_rescheduled)
@@ -857,7 +861,10 @@ function yieldto(t::Task, @nospecialize(x=nothing))
     elseif t._state === task_state_failed
         throw(t.result)
     end
-    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
+    # ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
+    # if hash(time()) % 1000 == 0
+    #     print("TASK-YIELD:\n$(sprint(Base.show_backtrace, Base.stacktrace()))\n\n\n")
+    # end
     t.result = x
     set_next_task(t)
     return try_yieldto(identity)
@@ -884,7 +891,10 @@ end
 
 # yield to a task, throwing an exception in it
 function throwto(t::Task, @nospecialize exc)
-    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
+    # ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
+    # if hash(time()) % 1000 == 0
+    #     print("TASK-YIELD:\n$(sprint(Base.show_backtrace, Base.stacktrace()))\n\n\n")
+    # end
     t.result = exc
     t._isexception = true
     set_next_task(t)
@@ -937,7 +947,10 @@ checktaskempty = Partr.multiq_check_empty
 end
 
 function wait()
-    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
+    ccall(:jl_tv_tasks_waiting_p_inc, Cvoid, ())
+    # if hash(time()) % 1000 == 0
+    #     print("TASK-YIELD:\n$(sprint(Base.show_backtrace, Base.stacktrace()))\n\n\n")
+    # end
     GC.safepoint()
     W = workqueue_for(Threads.threadid())
     poptask(W)
@@ -947,6 +960,7 @@ function wait()
     # Will there be contention on libuv lock?
     process_events()
     # return when we come out of the queue
+    ccall(:jl_tv_tasks_waiting_m_inc, Cvoid, ())
     return result
 end
 

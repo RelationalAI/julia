@@ -24,8 +24,8 @@ extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_p;
 extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_m;
 extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_p;
 extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_m;
-extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_p;
-extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_m;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_waiting_p;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_waiting_m;
 
 #ifdef __cplusplus
 extern "C" {

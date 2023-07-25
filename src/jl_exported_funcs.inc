@@ -477,7 +477,8 @@
     XX(jl_tupletype_fill) \
     XX(jl_tv_multiq_p_inc) \
     XX(jl_tv_multiq_m_inc) \
-    XX(jl_tv_tasks_running_m_inc) \
+    XX(jl_tv_tasks_waiting_p_inc) \
+    XX(jl_tv_tasks_waiting_m_inc) \
     XX(jl_tv_getmetric) \
     XX(jl_typeassert) \
     XX(jl_typeinf_begin) \

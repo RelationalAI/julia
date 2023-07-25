@@ -138,16 +138,13 @@ internal counter and return immediately.
         rl.reentrancy_cnt = n
         if n == 0x0000_00000
             @atomic :monotonic rl.locked_by = nothing
-            if (@atomicswap :release rl.havelock = 0x00) == 0x02
-                (@noinline function notifywaiters(rl)
-                    cond_wait = rl.cond_wait
-                    lock(cond_wait)
-                    try
-                        notify(cond_wait)
-                    finally
-                        unlock(cond_wait)
-                    end
-                end)(rl)
+            @atomic :release rl.havelock = 0x00
+            cond_wait = rl.cond_wait
+            lock(cond_wait)
+            try
+                notify(cond_wait, all=false)
+            finally
+                unlock(cond_wait)
             end
             return true
         end

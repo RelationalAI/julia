@@ -297,8 +297,8 @@ JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_p = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_m = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_p = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_m = 0;
-JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_p = 0;
-JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_m = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_waiting_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_waiting_m = 0;
 
 JL_DLLEXPORT void jl_tv_multiq_p_inc(void)
 { jl_atomic_fetch_add_relaxed(&jl_tv_multiq_p, 1); }
@@ -306,8 +306,27 @@ JL_DLLEXPORT void jl_tv_multiq_p_inc(void)
 JL_DLLEXPORT void jl_tv_multiq_m_inc(void)
 { jl_atomic_fetch_add_relaxed(&jl_tv_multiq_m, 1); }
 
-JL_DLLEXPORT void jl_tv_tasks_running_m_inc(void)
-{ jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_m, 1); }
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_dbg_counter = 0;
+
+JL_DLLEXPORT void jl_tv_tasks_waiting_p_inc(void)
+{
+    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_waiting_p, 1);
+    // if (jl_atomic_fetch_add_relaxed(&jl_tv_dbg_counter, 1) % 521 == 257)
+    // {
+    //     JL_TRY {
+    //         jl_error(""); // get a backtrace
+    //     }
+    //     JL_CATCH {
+    //         jl_printf((JL_STREAM*)STDERR_FILENO, "\n\nSample of task waiting:\n");
+    //         jlbacktrace(); // written to STDERR_FILENO
+    //     }
+    // }
+}
+
+JL_DLLEXPORT void jl_tv_tasks_waiting_m_inc(void)
+{
+    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_waiting_m, 1);
+}
 
 JL_DLLEXPORT int jl_tv_getmetric(int i)
 {
@@ -319,8 +338,8 @@ JL_DLLEXPORT int jl_tv_getmetric(int i)
         case 4: return jl_atomic_load_relaxed(&jl_tv_tasks_m);
         case 5: return jl_atomic_load_relaxed(&jl_tv_multiq_p);
         case 6: return jl_atomic_load_relaxed(&jl_tv_multiq_m);
-        case 7: return jl_atomic_load_relaxed(&jl_tv_tasks_running_p);
-        case 8: return jl_atomic_load_relaxed(&jl_tv_tasks_running_m);
+        case 7: return jl_atomic_load_relaxed(&jl_tv_tasks_waiting_p);
+        case 8: return jl_atomic_load_relaxed(&jl_tv_tasks_waiting_m);
         default: return 0;
     }
 }
