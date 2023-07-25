@@ -84,6 +84,7 @@ end
         #@assert rl.reentrancy_cnt === 0
         rl.reentrancy_cnt = 0x0000_0001
         @atomic :release rl.locked_by = ct
+        # TODO: returning without enable_finalizers() ??
         return true
     end
     GC.enable_finalizers()
@@ -109,6 +110,8 @@ Each `lock` must be matched by an [`unlock`](@ref).
                     # it was unlocked, so try to lock it ourself
                     _trylock(rl, current_task()) && break
                 else # it was locked, so now wait for the release to notify us
+                    # TODO: verify it is impossible for havelock == 0x00 before
+                    # waiting here.
                     wait(c)
                 end
             end

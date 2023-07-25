@@ -291,6 +291,40 @@ JL_DLLEXPORT _Atomic(uint8_t) jl_measure_compile_time_enabled = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_compile_time = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_recompile_time = 0;
 
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_threads_waiting_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_threads_waiting_m = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_m = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_m = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_m = 0;
+
+JL_DLLEXPORT void jl_tv_multiq_p_inc(void)
+{ jl_atomic_fetch_add_relaxed(&jl_tv_multiq_p, 1); }
+
+JL_DLLEXPORT void jl_tv_multiq_m_inc(void)
+{ jl_atomic_fetch_add_relaxed(&jl_tv_multiq_m, 1); }
+
+JL_DLLEXPORT void jl_tv_tasks_running_m_inc(void)
+{ jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_m, 1); }
+
+JL_DLLEXPORT int jl_tv_getmetric(int i)
+{
+    switch(i)
+    {
+        case 1: return jl_atomic_load_relaxed(&jl_tv_threads_waiting_p);
+        case 2: return jl_atomic_load_relaxed(&jl_tv_threads_waiting_m);
+        case 3: return jl_atomic_load_relaxed(&jl_tv_tasks_p);
+        case 4: return jl_atomic_load_relaxed(&jl_tv_tasks_m);
+        case 5: return jl_atomic_load_relaxed(&jl_tv_multiq_p);
+        case 6: return jl_atomic_load_relaxed(&jl_tv_multiq_m);
+        case 7: return jl_atomic_load_relaxed(&jl_tv_tasks_running_p);
+        case 8: return jl_atomic_load_relaxed(&jl_tv_tasks_running_m);
+        default: return 0;
+    }
+}
+
 // return calling thread's ID
 JL_DLLEXPORT int16_t jl_threadid(void)
 {

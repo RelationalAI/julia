@@ -30,6 +30,7 @@ static const int16_t sleeping = 1;
 // invariant: Any particular thread is not asleep unless that thread's sleep_check_state is sleeping.
 // invariant: The transition of a thread state to sleeping must be followed by a check that there wasn't work pending for it.
 // information: Observing thread not-sleeping is sufficient to ensure the target thread will subsequently inspect its local queue.
+                                                                                             // ^^^ ???   TODO
 // information: Observing thread is-sleeping says it may be necessary to notify it at least once to wakeup. It may already be awake however for a variety of reasons.
 // information: These observations require sequentially-consistent fences to be inserted between each of those operational phases.
 // [^store_buffering_1]: These fences are used to avoid the cycle 2b -> 1a -> 1b -> 2a -> 2b where
@@ -187,6 +188,9 @@ static int sleep_check_after_threshold(uint64_t *start_cycles)
         *start_cycles = jl_hrtime();
         return 0;
     }
+    // TODO: jl_hrtime() is a wall clock timestamp. This OS thread is not guaranteed to
+    // run continuously- there might be a context switch, and this thread could resume
+    // well after sleep_threshold has elapsed?
     uint64_t elapsed_cycles = jl_hrtime() - (*start_cycles);
     if (elapsed_cycles >= sleep_threshold) {
         *start_cycles = 0;
@@ -195,12 +199,15 @@ static int sleep_check_after_threshold(uint64_t *start_cycles)
     return 0;
 }
 
-
+// this doesn't guarantee that on return the thread is waking or awake.
+// there is a race condition here where the other thread goes to sleep just
+// after this thread checks its state and sees !(jl_atomic_load_relaxed(&other->sleep_check_state) == sleeping)
 static int wake_thread(int16_t tid)
 {
     jl_ptls_t other = jl_all_tls_states[tid];
     int8_t state = sleeping;
 
+    // TODO: use of condition variable here doesn't adhere to required discipline?
     if (jl_atomic_load_relaxed(&other->sleep_check_state) == sleeping) {
         if (jl_atomic_cmpswap_relaxed(&other->sleep_check_state, &state, not_sleeping)) {
             JL_PROBE_RT_SLEEP_CHECK_WAKE(other, state);
@@ -255,6 +262,8 @@ JL_DLLEXPORT void jl_wakeup_thread(int16_t tid)
     }
     // check if the other threads might be sleeping
     if (tid == -1) {
+        // TODO: every thread woken up when something added to multi-queue??
+
         // something added to the multi-queue: notify all threads
         // in the future, we might want to instead wake some fraction of threads,
         // and let each of those wake additional threads if they find work
@@ -281,7 +290,7 @@ static jl_task_t *get_next_task(jl_value_t *trypoptask, jl_value_t *q)
     jl_task_t *task = (jl_task_t*)jl_apply_generic(trypoptask, &q, 1);
     if (jl_typeis(task, jl_task_type)) {
         int self = jl_atomic_load_relaxed(&jl_current_task->tid);
-        jl_set_task_tid(task, self);
+        jl_set_task_tid(task, self);     // TODO: return value not checked
         return task;
     }
     return NULL;
@@ -302,6 +311,7 @@ static int may_sleep(jl_ptls_t ptls) JL_NOTSAFEPOINT
     return jl_atomic_load_relaxed(&ptls->sleep_check_state) == sleeping;
 }
 
+// TODO: what is _threadedregion?
 extern _Atomic(unsigned) _threadedregion;
 
 JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, jl_value_t *checkempty)
@@ -420,7 +430,9 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
             int8_t gc_state = jl_gc_safe_enter(ptls);
             uv_mutex_lock(&sleep_locks[ptls->tid]);
             while (may_sleep(ptls)) {
+                jl_atomic_fetch_add_relaxed(&jl_tv_threads_waiting_p, 1);
                 uv_cond_wait(&wake_signals[ptls->tid], &sleep_locks[ptls->tid]);
+                jl_atomic_fetch_add_relaxed(&jl_tv_threads_waiting_m, 1);
                 // TODO: help with gc work here, if applicable
             }
             assert(jl_atomic_load_relaxed(&ptls->sleep_check_state) == not_sleeping);

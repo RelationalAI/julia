@@ -324,6 +324,7 @@ macro spawn(args...)
         let $(letargs...)
             local task = Task($thunk)
             task.sticky = false
+            # TODO: return value from jl_set_task_threadpoolid not checked
             ccall(:jl_set_task_threadpoolid, Cint, (Any, Int8), task, $tpid)
             if $(Expr(:islocal, var))
                 put!($var, task)
