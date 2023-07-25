@@ -292,6 +292,7 @@ static _Atomic(jl_function_t*) task_done_hook_func JL_GLOBALLY_ROOTED = NULL;
 
 void JL_NORETURN jl_finish_task(jl_task_t *t)
 {
+    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_m, 1);
     jl_task_t *ct = jl_current_task;
     JL_PROBE_RT_FINISH_TASK(ct);
     JL_SIGATOMIC_BEGIN();
@@ -685,6 +686,7 @@ JL_DLLEXPORT void jl_switch(void)
     if (other_defer_signal && !defer_signal)
         jl_sigint_safepoint(ptls);
 
+    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_p, 1);
     JL_PROBE_RT_RUN_TASK(ct);
 }
 
@@ -954,6 +956,7 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
 #ifdef _COMPILER_ASAN_ENABLED_
     t->ctx.asan_fake_stack = NULL;
 #endif
+    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_p, 1);
     return t;
 }
 
@@ -977,6 +980,7 @@ JL_DLLEXPORT jl_value_t *jl_get_root_task(void)
     return (jl_value_t*)ct->ptls->root_task;
 }
 
+// this function has no callers?
 JL_DLLEXPORT void jl_task_wait()
 {
     static jl_function_t *wait_func = NULL;
@@ -1067,6 +1071,7 @@ CFI_NORETURN
         jl_atomic_store_release(&pt->tid, -1);
 #endif
 
+    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_p, 1);
     ct->started = 1;
     JL_PROBE_RT_START_TASK(ct);
     if (jl_atomic_load_relaxed(&ct->_isexception)) {
@@ -1092,6 +1097,7 @@ CFI_NORETURN
 skip_pop_exception:;
     }
     ct->result = res;
+    jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_m, 1);
     jl_gc_wb(ct, ct->result);
     jl_finish_task(ct);
     jl_gc_debug_critical_error();

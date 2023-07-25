@@ -21,6 +21,16 @@
 #define sleep(x) Sleep(1000*x)
 #endif
 
+
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_threads_running_p;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_threads_running_m;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_p;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_m;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_p;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_m;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_p;
+extern JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_m;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

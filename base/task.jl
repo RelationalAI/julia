@@ -835,6 +835,8 @@ function schedule(t::Task, @nospecialize(arg); error=false)
         t.queue === nothing || Base.error("schedule: Task not runnable")
         setfield!(t, :result, arg)
     end
+
+	# TODO: how do we ensure that the same task is not enqueued multiple times?
     enq_work(t)
     return t
 end
@@ -868,6 +870,7 @@ immediately yields to `t` before calling the scheduler.
 function yield(t::Task, @nospecialize(x=nothing))
     (t._state === task_state_runnable && t.queue === nothing) || error("yield: Task not runnable")
     t.result = x
+    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
     enq_work(current_task())
     set_next_task(t)
     return try_yieldto(ensure_rescheduled)
@@ -889,6 +892,7 @@ function yieldto(t::Task, @nospecialize(x=nothing))
     elseif t._state === task_state_failed
         throw(t.result)
     end
+    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
     t.result = x
     set_next_task(t)
     return try_yieldto(identity)
@@ -915,6 +919,7 @@ end
 
 # yield to a task, throwing an exception in it
 function throwto(t::Task, @nospecialize exc)
+    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
     t.result = exc
     t._isexception = true
     set_next_task(t)
@@ -967,11 +972,17 @@ checktaskempty = Partr.multiq_check_empty
 end
 
 function wait()
+    ccall(:jl_tv_tasks_running_m_inc, Cvoid, ())
     GC.safepoint()
     W = workqueue_for(Threads.threadid())
     poptask(W)
     result = try_yieldto(ensure_rescheduled)
+
+    # TODO: how does this call to process_events() interact with locks / conditions?
+    # First thing a task does after waking is to process events?
+    # Will there be contention on libuv lock?
     process_events()
+
     # return when we come out of the queue
     return result
 end

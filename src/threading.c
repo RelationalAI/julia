@@ -40,6 +40,40 @@ JL_DLLEXPORT _Atomic(uint8_t) jl_measure_compile_time_enabled = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_compile_time = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_recompile_time = 0;
 
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_threads_running_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_threads_running_m = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_m = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_multiq_m = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_p = 0;
+JL_DLLEXPORT _Atomic(uint64_t) jl_tv_tasks_running_m = 0;
+
+JL_DLLEXPORT void jl_tv_multiq_p_inc(void)
+{ jl_atomic_fetch_add_relaxed(&jl_tv_multiq_p, 1); }
+
+JL_DLLEXPORT void jl_tv_multiq_m_inc(void)
+{ jl_atomic_fetch_add_relaxed(&jl_tv_multiq_m, 1); }
+
+JL_DLLEXPORT void jl_tv_tasks_running_m_inc(void)
+{ jl_atomic_fetch_add_relaxed(&jl_tv_tasks_running_m, 1); }
+
+JL_DLLEXPORT int jl_tv_getmetric(int i)
+{
+    switch(i)
+    {
+        case 1: return jl_atomic_load_relaxed(&jl_tv_threads_running_p);
+        case 2: return jl_atomic_load_relaxed(&jl_tv_threads_running_m);
+        case 3: return jl_atomic_load_relaxed(&jl_tv_tasks_p);
+        case 4: return jl_atomic_load_relaxed(&jl_tv_tasks_m);
+        case 5: return jl_atomic_load_relaxed(&jl_tv_multiq_p);
+        case 6: return jl_atomic_load_relaxed(&jl_tv_multiq_m);
+        case 7: return jl_atomic_load_relaxed(&jl_tv_tasks_running_p);
+        case 8: return jl_atomic_load_relaxed(&jl_tv_tasks_running_m);
+        default: return 0;
+    }
+}
+
 JL_DLLEXPORT void *jl_get_ptls_states(void)
 {
     // mostly deprecated: use current_task instead
@@ -569,8 +603,11 @@ void jl_start_threads(void)
         jl_threadarg_t *t = (jl_threadarg_t *)malloc_s(sizeof(jl_threadarg_t)); // ownership will be passed to the thread
         t->tid = i;
         t->barrier = &thread_init_done;
+        // TODO: increment threads running metric
         uv_thread_create(&uvtid, jl_threadfun, t);
         if (exclusive) {
+            // TODO: log setting thread affinity
+            jl_printf(JL_STDERR, "Setting thread affinity for thread %d\n", i);
             mask[i] = 1;
             uv_thread_setaffinity(&uvtid, mask, NULL, cpumasksize);
             mask[i] = 0;
@@ -625,7 +662,11 @@ void _jl_mutex_wait(jl_task_t *self, jl_mutex_t *lock, int safepoint)
             // when running under `rr`, use system mutexes rather than spin locking
             uv_mutex_lock(&tls_lock);
             if (jl_atomic_load_relaxed(&lock->owner))
+            {
+                jl_atomic_fetch_add_relaxed(&jl_tv_threads_running_m, 1);
                 uv_cond_wait(&cond, &tls_lock);
+                jl_atomic_fetch_add_relaxed(&jl_tv_threads_running_p, 1);
+            }
             uv_mutex_unlock(&tls_lock);
         }
         jl_cpu_pause();

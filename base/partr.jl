@@ -94,12 +94,16 @@ end
 
 
 function multiq_insert(task::Task, priority::UInt16)
+    ccall(:jl_tv_multiq_p_inc, Cvoid, ())
+
+    # tpid = task pool id
     tpid = ccall(:jl_get_task_threadpoolid, Int8, (Any,), task)
     heap_p = multiq_size(tpid)
     tp = tpid + 1
 
     task.priority = priority
 
+    # TODO: task pushed to a randomly chosen thread
     rn = cong(heap_p, cong_unbias[tp])
     tpheaps = heaps[tp]
     while !trylock(tpheaps[rn].lock)
@@ -174,6 +178,7 @@ function multiq_deletemin()
         prio1 = heap.tasks[1].priority
     end
     @atomic :monotonic heap.priority = prio1
+    ccall(:jl_tv_multiq_m_inc, Cvoid, ())
     unlock(heap.lock)
 
     return task

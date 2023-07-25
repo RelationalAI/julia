@@ -165,6 +165,10 @@
     XX(jl_gc_counted_malloc) \
     XX(jl_gc_counted_realloc_with_old_size) \
     XX(jl_gc_diff_total_bytes) \
+    XX(jl_tv_multiq_p_inc) \
+    XX(jl_tv_multiq_m_inc) \
+    XX(jl_tv_tasks_running_m_inc) \
+    XX(jl_tv_getmetric) \
     XX(jl_gc_enable) \
     XX(jl_gc_enable_conservative_gc_support) \
     XX(jl_gc_enable_finalizers) \

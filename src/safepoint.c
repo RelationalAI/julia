@@ -168,7 +168,11 @@ void jl_safepoint_wait_gc(void)
         // This is particularly important when run under rr.
         uv_mutex_lock(&safepoint_lock);
         if (jl_atomic_load_relaxed(&jl_gc_running))
+        {
+            jl_atomic_fetch_add_relaxed(&jl_tv_threads_running_m, 1);
             uv_cond_wait(&safepoint_cond, &safepoint_lock);
+            jl_atomic_fetch_add_relaxed(&jl_tv_threads_running_p, 1);
+        }
         uv_mutex_unlock(&safepoint_lock);
     }
 }

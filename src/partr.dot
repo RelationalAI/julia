@@ -1,0 +1,94 @@
+digraph G {
+    node [shape=box]
+    //subgraph cluster0 {
+        // partr.c
+        wake_thread
+        wake_signal [shape=none]
+        sleep_check_state [shape=none]
+        sleep_lock [shape=none]
+        //wake_thread -> wake_signal [style=dotted]
+        //wake_thread -> sleep_check_state [style=dotted]
+        //wake_thread -> sleep_lock [style=dotted]
+
+        wake_libuv -> jl_wake_libuv
+        //jl_wakeup_thread -> sleep_check_state [style=dotted]
+        jl_wakeup_thread -> uv_stop
+        jl_wakeup_thread -> wake_thread
+        jl_wakeup_thread -> wake_libuv
+        get_next_task -> trypoptask [label="jl_apply_generic"]
+        get_next_task -> jl_set_task_tid
+        check_empty -> checkempty [label="jl_apply_generic"]
+        //may_sleep -> sleep_check_state [style=dotted]
+
+        jl_uv_n_waiters [shape=none]
+        jl_task_get_next -> get_next_task
+        jl_task_get_next -> check_empty
+        jl_task_get_next -> sleep_check_after_threshold
+        //jl_task_get_next -> sleep_check_state [style=dotted]
+        jl_task_get_next -> jl_global_event_loop
+        jl_task_get_next -> may_sleep
+        //jl_task_get_next -> jl_uv_n_waiters [style=dotted]
+        jl_task_get_next -> uv_run
+        //jl_task_get_next -> sleep_lock [style=dotted]
+        jl_task_get_next -> jl_process_events
+        jl_task_get_next -> multiq_check_empty
+    //}
+
+    // task.c
+    //subgraph cluster1 {
+        jl_finish_task
+        //jl_set_next_task
+        //jl_get_next_task
+        ctx_switch
+        jl_switch -> ctx_switch
+        jl_switchto -> jl_set_next_task
+        jl_switchto -> jl_switch
+        jl_new_task
+        jl_task_wait
+        jl_task_wait -> wait [label="jl_apply"]
+        jl_schedule_task
+        jl_schedule_task -> schedule [label="jl_apply"]
+        start_task -> _start_task
+        _start_task -> jl_finish_task
+        jl_finish_task -> task_done_hook
+    //}
+
+    // partr.jl
+    //subgraph cluster2 {
+        multiq_insert -> jl_get_task_threadpoolid
+        multiq_deletemin -> jl_threadpoolid
+        multiq_deletemin -> jl_set_task_tid
+        multiq_check_empty
+    //}
+
+    // task.jl
+    //subgraph cluster3 {
+        workqueue_for
+        trypoptask
+        enq_work -> jl_set_task_tid
+        enq_work -> workqueue_for
+        enq_work -> multiq_insert
+        enq_work -> jl_wakeup_thread
+        trypoptask -> multiq_deletemin
+        poptask -> trypoptask
+        poptask -> jl_task_get_next
+        poptask -> set_next_task
+        wait -> workqueue_for
+        wait -> poptask
+        wait -> try_yieldto
+        wait -> process_events
+        task_done_hook -> wait
+    //}
+
+    // threading.c
+    // subgraph cluster4 {
+        jl_start_threads -> uv_thread_create
+
+
+    // }
+    wait_condition [label="wait(::GenericCondition)"]
+    wait_condition -> wait
+    closewrite -> wait
+    uv_write -> wait
+    yield -> wait
+}
