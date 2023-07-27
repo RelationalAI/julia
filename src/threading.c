@@ -311,16 +311,16 @@ JL_DLLEXPORT _Atomic(uint64_t) jl_tv_dbg_counter = 0;
 JL_DLLEXPORT void jl_tv_tasks_waiting_p_inc(void)
 {
     jl_atomic_fetch_add_relaxed(&jl_tv_tasks_waiting_p, 1);
-    // if (jl_atomic_fetch_add_relaxed(&jl_tv_dbg_counter, 1) % 521 == 257)
-    // {
-    //     JL_TRY {
-    //         jl_error(""); // get a backtrace
-    //     }
-    //     JL_CATCH {
-    //         jl_printf((JL_STREAM*)STDERR_FILENO, "\n\nSample of task waiting:\n");
-    //         jlbacktrace(); // written to STDERR_FILENO
-    //     }
-    // }
+    if (jl_atomic_fetch_add_relaxed(&jl_tv_dbg_counter, 1) % 521 == 257)
+    {
+        JL_TRY {
+            jl_error(""); // get a backtrace
+        }
+        JL_CATCH {
+            jl_printf((JL_STREAM*)STDERR_FILENO, "\n\nSample of task waiting:\n");
+            jlbacktrace(); // written to STDERR_FILENO
+        }
+    }
 }
 
 JL_DLLEXPORT void jl_tv_tasks_waiting_m_inc(void)
