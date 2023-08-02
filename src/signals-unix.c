@@ -876,6 +876,12 @@ static void *signal_listener(void *arg)
 
                 // notify thread to resume
                 jl_thread_resume(i, sig);
+
+                if (!critical)
+                {
+                    // Kludge: only sample a single thread, to get an unbiased sample
+                    break;
+                }
             }
             jl_unlock_profile();
         }
