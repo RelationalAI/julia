@@ -47,6 +47,9 @@ static void *map_anon_page(size_t size)
     void *mem = mmap(nullptr, size, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(mem != MAP_FAILED && "Cannot allocate RW memory");
+#ifdef MADV_NOHUGEPAGE
+    madvise(mem, size, MADV_NOHUGEPAGE);
+#endif
 #endif // _OS_WINDOWS_
     return mem;
 }
@@ -244,6 +247,9 @@ static void *create_shared_map(size_t size, size_t id)
     void *addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED,
                       anon_hdl, id);
     assert(addr != MAP_FAILED && "Cannot map RW view");
+#ifdef MADV_NOHUGEPAGE
+    madvise(addr, size, MADV_NOHUGEPAGE);
+#endif
     return addr;
 }
 
