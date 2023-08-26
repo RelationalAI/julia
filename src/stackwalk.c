@@ -1158,13 +1158,14 @@ JL_DLLEXPORT void jl_print_backtrace(void) JL_NOTSAFEPOINT
 
 extern int gc_first_tid;
 
-// Print backtraces for all live tasks, for all threads, to jl_safe_printf stderr
+// Print backtraces for all live tasks, for all threads.
+// WARNING: this is dangerous and can crash if used outside of gdb, if
+// all of Julia's threads are not stopped!
 JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
 {
     size_t nthreads = jl_atomic_load_acquire(&jl_n_threads);
     jl_ptls_t *allstates = jl_atomic_load_relaxed(&jl_all_tls_states);
     for (size_t i = 0; i < nthreads; i++) {
-        // skip GC threads since they don't have tasks
         if (gc_first_tid <= i && i < gc_first_tid + jl_n_gcthreads) {
             continue;
         }
