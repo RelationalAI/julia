@@ -86,9 +86,11 @@
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Linker/Linker.h>
 
+#if 0
 #ifdef USE_PERFETTO
 extern FILE *tracef;
 int tracecg = 1;
+#endif
 #endif
 
 using namespace llvm;
@@ -8474,6 +8476,7 @@ jl_llvm_functions_t jl_emit_code(
         jl_codegen_params_t &params)
 {
     JL_TIMING(CODEGEN);
+#if 0
 #ifdef USE_PERFETTO
     char tbuf[1024];
     jl_task_t *ct = jl_current_task;
@@ -8481,6 +8484,7 @@ jl_llvm_functions_t jl_emit_code(
              "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
              tracecg, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
 #endif
 
     // caller must hold codegen_lock
@@ -8515,12 +8519,14 @@ jl_llvm_functions_t jl_emit_code(
         jlbacktrace(); // written to STDERR_FILENO
     }
 
+#if 0
 #ifdef USE_PERFETTO
     snprintf(tbuf, 1024, "{\"name\":\"CodeGen\",\"cat\":\"compiler\",\"id\":%-d,"
              "\"ph\":\"E\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
              tracecg, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
     tracecg++;
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
 #endif
 
     return decls;
