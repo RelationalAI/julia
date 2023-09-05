@@ -25,6 +25,11 @@ int gc_first_tid;
 uv_mutex_t gc_threads_lock;
 uv_cond_t gc_threads_cond;
 
+#ifdef USE_PERFETTO
+extern FILE *tracef;
+int tracegc = 1;
+#endif
+
 // Linked list of callback functions
 
 typedef void (*jl_gc_cb_func_t)(void);
@@ -3269,6 +3274,14 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     int64_t last_perm_scanned_bytes = perm_scanned_bytes;
     JL_PROBE_GC_MARK_BEGIN();
     uint64_t start_mark_time = jl_hrtime();
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    jl_task_t *ct = jl_current_task;
+    snprintf(tbuf, 1024, "{\"name\":\"Mark\",\"cat\":\"gc\",\"id\":%-d,\"ph\":\"B\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             tracegc, getpid(), jl_get_task_tid(ct), start_mark_time/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
 
     // 1. fix GC bits of objects in the remset.
     assert(gc_n_threads);
@@ -3313,6 +3326,13 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     gc_settime_premark_end();
     gc_time_mark_pause(gc_start_time, scanned_bytes, perm_scanned_bytes);
     uint64_t end_mark_time = jl_hrtime();
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"Mark\",\"cat\":\"gc\",\"id\":%-d,\"ph\":\"E\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             tracegc, getpid(), jl_get_task_tid(ct), end_mark_time/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
     uint64_t mark_time = end_mark_time - start_mark_time;
     gc_num.mark_time = mark_time;
     gc_num.total_mark_time += mark_time;
@@ -3439,6 +3459,14 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     uint64_t start_sweep_time = jl_hrtime();
     JL_PROBE_GC_SWEEP_BEGIN(sweep_full);
     current_sweep_full = sweep_full;
+
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"Sweep\",\"cat\":\"gc\",\"id\":%-d,\"ph\":\"B\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,\"args\":{\"full\":%d}},\n",
+             tracegc, getpid(), jl_get_task_tid(ct), start_sweep_time/1000, sweep_full);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
     sweep_weak_refs();
     sweep_stack_pools();
     gc_sweep_foreign_objs();
@@ -3451,6 +3479,12 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     JL_PROBE_GC_SWEEP_END();
 
     uint64_t gc_end_time = jl_hrtime();
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"Sweep\",\"cat\":\"gc\",\"id\":%-d,\"ph\":\"E\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             tracegc, getpid(), jl_get_task_tid(ct), gc_end_time/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
     uint64_t pause = gc_end_time - gc_start_time;
     uint64_t sweep_time = gc_end_time - start_sweep_time;
     gc_num.total_sweep_time += sweep_time;
@@ -3586,6 +3620,14 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
         return;
     }
     JL_TIMING(GC);
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    snprintf(tbuf, 1024, "{\"name\":\"GC\",\"cat\":\"gc\",\"id\":%-d,\"ph\":\"B\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             tracegc, getpid(), jl_get_task_tid(ct), t0/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
     int last_errno = errno;
 #ifdef _OS_WINDOWS_
     DWORD last_error = GetLastError();
@@ -3611,6 +3653,13 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
         gc_num.max_time_to_safepoint = duration;
     gc_num.time_to_safepoint = duration;
     gc_num.total_time_to_safepoint += duration;
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"StopTheWorld\",\"cat\":\"gc\",\"ph\":\"i\","
+             "\"s\":\"t\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             getpid(), jl_get_task_tid(ct), t1/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
 
     gc_invoke_callbacks(jl_gc_cb_pre_gc_t,
         gc_cblist_pre_gc, (collection));
@@ -3631,6 +3680,14 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     jl_safepoint_end_gc();
     jl_gc_state_set(ptls, old_state, JL_GC_STATE_WAITING);
     JL_PROBE_GC_END();
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"GC\",\"cat\":\"gc\",\"id\":%-d,\"ph\":\"E\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             tracegc, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    tracegc++;
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
 
     // Only disable finalizers on current thread
     // Doing this on all threads is racy (it's impossible to check
@@ -3639,6 +3696,12 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
         run_finalizers(ct);
     }
     JL_PROBE_GC_FINALIZER();
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"Finalizer\",\"cat\":\"gc\",\"ph\":\"i\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
 
     gc_invoke_callbacks(jl_gc_cb_post_gc_t,
         gc_cblist_post_gc, (collection));

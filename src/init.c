@@ -42,6 +42,10 @@ extern BOOL (WINAPI *hSymRefreshModuleList)(HANDLE);
 #include <unistd.h>
 #endif
 
+#ifdef USE_PERFETTO
+extern FILE *tracef;
+#endif
+
 // list of modules being deserialized with __init__ methods
 jl_array_t *jl_module_init_order;
 
@@ -204,6 +208,10 @@ void jl_task_frame_noreturn(jl_task_t *ct);
 // cause this process to exit with WEXITSTATUS(signo), after waiting to finish all julia, C, and C++ cleanup
 JL_DLLEXPORT void jl_exit(int exitcode)
 {
+#ifdef USE_PERFETTO
+    fprintf(tracef, "]}");
+    fclose(tracef);
+#endif
     jl_atexit_hook(exitcode);
     exit(exitcode);
 }
@@ -801,6 +809,13 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
     jl_task_t *ct = jl_init_root_task(ptls, stack_lo, stack_hi);
 #pragma GCC diagnostic pop
     JL_GC_PROMISE_ROOTED(ct);
+#ifdef USE_PERFETTO
+    char *tfn = tmpnam(NULL);
+    assert(tfn != NULL);
+    tracef = fopen(tfn, "w");
+    fprintf(stdout, "Writing Perfetto trace to %s\n", tfn);
+    fprintf(tracef, "{\"traceEvents\":[\n");
+#endif
     _finish_julia_init(rel, ptls, ct);
 }
 

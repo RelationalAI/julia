@@ -24,6 +24,11 @@
 extern "C" {
 #endif
 
+#ifdef USE_PERFETTO
+extern FILE *tracef;
+int traceti = 1;
+#endif
+
 JL_DLLEXPORT _Atomic(size_t) jl_world_counter = 1; // uses atomic acquire/release
 JL_DLLEXPORT size_t jl_get_world_counter(void) JL_NOTSAFEPOINT
 {
@@ -3715,6 +3720,14 @@ JL_DLLEXPORT void jl_typeinf_timing_begin(void)
     if (!ct->reentrant_timing++) {
         ct->inference_start_time = jl_hrtime();
     }
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    snprintf(tbuf, 1024, "{\"name\":\"TypeInference\",\"cat\":\"compiler\",\"id\":%-d,"
+             "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             traceti, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
 }
 
 JL_DLLEXPORT void jl_typeinf_timing_end(void)
@@ -3727,6 +3740,15 @@ JL_DLLEXPORT void jl_typeinf_timing_end(void)
         }
         ct->inference_start_time = 0;
     }
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    snprintf(tbuf, 1024, "{\"name\":\"TypeInference\",\"cat\":\"compiler\",\"id\":%-d,"
+             "\"ph\":\"E\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             traceti, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    traceti++;
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
 }
 
 JL_DLLEXPORT void jl_typeinf_lock_begin(void)

@@ -41,6 +41,10 @@
 extern "C" {
 #endif
 
+#ifdef USE_PERFETTO
+FILE *tracef;
+#endif
+
 #if defined(_COMPILER_ASAN_ENABLED_)
 static inline void sanitizer_start_switch_fiber(jl_ptls_t ptls, jl_task_t *from, jl_task_t *to) {
     if (to->copy_stack)
@@ -294,6 +298,14 @@ void JL_NORETURN jl_finish_task(jl_task_t *t)
 {
     jl_task_t *ct = jl_current_task;
     JL_PROBE_RT_FINISH_TASK(ct);
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    snprintf(tbuf, 1024, "{\"name\":\"TaskFinish\",\"cat\":\"task\",\"ph\":\"i\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,\"args\":{\"task\":\"0x%lx\"}},\n",
+             getpid(), jl_get_task_tid(ct), jl_hrtime()/1000,
+             jl_object_id((jl_value_t *)ct));
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
     JL_SIGATOMIC_BEGIN();
     if (jl_atomic_load_relaxed(&t->_isexception))
         jl_atomic_store_release(&t->_state, JL_TASK_STATE_FAILED);
@@ -638,6 +650,21 @@ JL_DLLEXPORT void jl_switch(void)
         jl_error("cannot switch to task running on another thread");
 
     JL_PROBE_RT_PAUSE_TASK(ct);
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    int tcttid = jl_get_task_tid(ct);
+    uint64_t tts = jl_hrtime()/1000;
+    uintptr_t tctoid = jl_object_id((jl_value_t *)ct);
+    snprintf(tbuf, 1024, "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
+             "\"ph\":\"E\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"task\":\"0x%lx\"}},\n"
+                         "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
+             "\"ph\":\"s\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"task\":\"0x%lx\"}},\n",
+             tctoid, getpid(), tcttid, tts, tctoid,
+             tctoid, getpid(), tcttid, tts - 1, tctoid);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
 
     // Store old values on the stack and reset
     sig_atomic_t defer_signal = ptls->defer_signal;
@@ -688,6 +715,20 @@ JL_DLLEXPORT void jl_switch(void)
         jl_sigint_safepoint(ptls);
 
     JL_PROBE_RT_RUN_TASK(ct);
+#ifdef USE_PERFETTO
+    tcttid = jl_get_task_tid(ct);
+    tts = jl_hrtime()/1000;
+    tctoid = jl_object_id((jl_value_t *)ct);
+    snprintf(tbuf, 1024, "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
+             "\"ph\":\"f\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"queue_duration\":2,\"task\":\"0x%lx\"}},\n"
+                         "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
+             "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"task\":\"0x%lx\"}},\n",
+             tctoid, getpid(), tcttid, tts, tctoid,
+             tctoid, getpid(), tcttid, tts, tctoid);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
 }
 
 JL_DLLEXPORT void jl_switchto(jl_task_t **pt)
@@ -894,6 +935,22 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
     jl_task_t *ct = jl_current_task;
     jl_task_t *t = (jl_task_t*)jl_gc_alloc(ct->ptls, sizeof(jl_task_t), jl_task_type);
     JL_PROBE_RT_NEW_TASK(ct, t);
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    int tcttid = jl_get_task_tid(ct);
+    uint64_t tts = jl_hrtime()/1000;
+    uintptr_t tctoid = jl_object_id((jl_value_t *)ct),
+              ttoid = jl_object_id((jl_value_t *)t);
+    snprintf(tbuf, 1024, "{\"name\":\"TaskNew\",\"cat\":\"task\",\"ph\":\"i\","
+             "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"task\":\"0x%lx\",\"parent\":\"0x%lx\"}},\n"
+                         "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
+             "\"ph\":\"s\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"task\":\"0x%lx\"}},\n",
+             getpid(), tcttid, tts, ttoid, tctoid,
+             ttoid, getpid(), tcttid, tts, ttoid);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
     t->copy_stack = 0;
     if (ssize == 0) {
         // stack size unspecified; use default
@@ -1076,6 +1133,21 @@ CFI_NORETURN
 
     ct->started = 1;
     JL_PROBE_RT_START_TASK(ct);
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    int tcttid = jl_get_task_tid(ct);
+    uint64_t tts = jl_hrtime()/1000;
+    uintptr_t tctoid = jl_object_id((jl_value_t *)ct);
+    snprintf(tbuf, 1024, "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
+             "\"ph\":\"f\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"queue_duration\":2,\"task\":\"0x%lx\"}},\n"
+                         "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
+             "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
+             "\"args\":{\"task\":\"0x%lx\"}},\n",
+             tctoid, getpid(), tcttid, tts, tctoid,
+             tctoid, getpid(), tcttid, tts, tctoid);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
     if (jl_atomic_load_relaxed(&ct->_isexception)) {
         record_backtrace(ptls, 0);
         jl_push_excstack(&ct->excstack, ct->result,
@@ -1530,6 +1602,9 @@ jl_task_t *jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi)
     ct->reentrant_inference = 0;
     ct->inference_start_time = 0;
     ptls->root_task = ct;
+#ifdef USE_PERFETTO
+    fprintf(stdout, "Started root task 0x%lx on thread %d\n", jl_object_id((jl_value_t *)ct), ptls->tid);
+#endif
     jl_atomic_store_relaxed(&ptls->current_task, ct);
     JL_GC_PROMISE_ROOTED(ct);
     jl_set_pgcstack(&ct->gcstack);

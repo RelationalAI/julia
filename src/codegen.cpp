@@ -86,6 +86,11 @@
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Linker/Linker.h>
 
+#ifdef USE_PERFETTO
+extern FILE *tracef;
+int tracecg = 1;
+#endif
+
 using namespace llvm;
 
 //Drag some useful type functions into our namespace
@@ -8469,6 +8474,15 @@ jl_llvm_functions_t jl_emit_code(
         jl_codegen_params_t &params)
 {
     JL_TIMING(CODEGEN);
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    jl_task_t *ct = jl_current_task;
+    snprintf(tbuf, 1024, "{\"name\":\"CodeGen\",\"cat\":\"compiler\",\"id\":%-d,"
+             "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             tracecg, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
     // caller must hold codegen_lock
     jl_llvm_functions_t decls = {};
     assert((params.params == &jl_default_cgparams /* fast path */ || !params.cache ||
@@ -8500,6 +8514,14 @@ jl_llvm_functions_t jl_emit_code(
         jl_printf((JL_STREAM*)STDERR_FILENO, "\n");
         jlbacktrace(); // written to STDERR_FILENO
     }
+
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"CodeGen\",\"cat\":\"compiler\",\"id\":%-d,"
+             "\"ph\":\"E\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             tracecg, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    tracecg++;
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
 
     return decls;
 }

@@ -56,6 +56,11 @@ using namespace llvm;
 # include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #endif
 
+#ifdef USE_PERFETTO
+extern FILE *tracef;
+int traceco = 1, tracelo = 1;
+#endif
+
 #define DEBUG_TYPE "julia_jitlayers"
 
 STATISTIC(LinkedGlobals, "Number of globals linked");
@@ -187,6 +192,15 @@ static jl_callptr_t _jl_compile_codeinst(
     if (timed)
         start_time = jl_hrtime();
 
+#ifdef USE_PERFETTO
+    char tbuf[1024];
+    jl_task_t *ct = jl_current_task;
+    snprintf(tbuf, 1024, "{\"name\":\"Compile\",\"cat\":\"compiler\",\"id\":%-d,"
+             "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             traceco, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
     assert(jl_is_code_instance(codeinst));
     assert(codeinst->min_world <= world && (codeinst->max_world >= world || codeinst->max_world == 0) &&
         "invalid world for method-instance");
@@ -307,6 +321,15 @@ static jl_callptr_t _jl_compile_codeinst(
             jl_printf(stream, "\"\n");
         }
     }
+
+#ifdef USE_PERFETTO
+    snprintf(tbuf, 1024, "{\"name\":\"Compile\",\"cat\":\"compiler\",\"id\":%-d,"
+             "\"ph\":\"E\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+             traceco, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+    traceco++;
+    fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
     return fptr;
 }
 
@@ -1115,6 +1138,15 @@ namespace {
 
         OptimizerResultT operator()(orc::ThreadSafeModule TSM, orc::MaterializationResponsibility &R) {
             TSM.withModuleDo([&](Module &M) {
+#ifdef USE_PERFETTO
+            char tbuf[1024];
+            jl_task_t *ct = jl_current_task;
+            snprintf(tbuf, 1024, "{\"name\":\"LLVMOpt\",\"cat\":\"compiler\","
+                     "\"id\":%-d,\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+                     tracelo, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+            fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
                 uint64_t start_time = 0;
                 std::stringstream before_stats_ss;
                 bool should_dump_opt_stats = false;
@@ -1173,6 +1205,14 @@ namespace {
                         }
                     }
                 }
+#ifdef USE_PERFETTO
+                snprintf(tbuf, 1024, "{\"name\":\"LLVMOpt\",\"cat\":\"compiler\","
+                         "\"id\":%-d,\"ph\":\"E\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu},\n",
+                         tracelo, getpid(), jl_get_task_tid(ct), jl_hrtime()/1000);
+                tracelo++;
+                fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
+#endif
+
             });
             switch (optlevel) {
                 case 0:
