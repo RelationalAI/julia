@@ -50,7 +50,7 @@ jobs:
           ssh-key: ${{ secrets.DELVECI_SSH }}
           path: deployment-repo
       - name: On rebase failure, create Jira incident
-        if: steps.attempt_the_rebase.outcome != 'success' && steps.attempt_resolve_manifest.outcome != 'success'
+        if: steps.attempt_the_rebase.outcome != 'success'
         id: create-jira-indicent
         uses: ./deployment-repo/.github/actions/create-jira-incident
         with:
