@@ -42,7 +42,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: On rebase failure, checkout jira-incident action
-        if: steps.attempt_the_rebase.outcome != 'success' && steps.attempt_resolve_manifest.outcome != 'success'
+        if: steps.attempt_the_rebase.outcome != 'success'
         id: checkout-jira-indicent-action
         uses: actions/checkout@v3
         with:
