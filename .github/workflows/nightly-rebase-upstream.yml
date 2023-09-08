@@ -41,14 +41,6 @@ jobs:
           git push --force origin ${{ matrix.julia_branch.name }} # force-push, because of the rebase.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # --- Install Julia: Copied from CompatHelper ------------------------
-      - name: On rebase failure, install Julia nightly
-        if: steps.attempt_the_rebase.outcome != 'success'
-        uses: julia-actions/setup-julia@v1
-        with:
-          version: 'nightly'  # use the nightly build to do the Pkg.update()
-          arch: ${{ runner.arch }}
-      # --------------------------------------------------------------------
       - name: On rebase failure, checkout jira-incident action
         if: steps.attempt_the_rebase.outcome != 'success' && steps.attempt_resolve_manifest.outcome != 'success'
         id: checkout-jira-indicent-action
