@@ -15,9 +15,9 @@ jobs:
       fail-fast: false  # run all jobs in the matrix even if one fails
       matrix:
         julia_branch:
-          - { name: "backports-release-1.9+RAI", upstream: "backports-release-1.9"}
-          - { name: "backports-release-1.10+RAI", upstream: "backports-release-1.10"}
-          - { name: "master+RAI", upstream: "master"}
+          - { name: "backports-release-1.9+RAI", upstream: "backports-release-1.9", comp_pr: "https://github.com/RelationalAI/julia/pull/45"}
+          - { name: "backports-release-1.10+RAI", upstream: "backports-release-1.10", comp_pr: "https://github.com/RelationalAI/julia/pull/46"}
+          - { name: "master+RAI", upstream: "master", comp_pr: "https://github.com/RelationalAI/julia/pull/47"}
     steps:
       - name: Checkout the repo and our branch
         uses: actions/checkout@v3
@@ -56,7 +56,7 @@ jobs:
         with:
           affected_service: Engineering - Julia Upgrades - Medium Priority Only
           summary: "Nightly rebase failed for RelationalAI/julia branch `${{ matrix.julia_branch.name }}`"
-          description: "Failed to rebase RelationalAI/julia branch `${{ matrix.julia_branch.name }}` branch on top of `${{ matrix.julia_branch.upstream}}`.\nPlease manually rebase ${{ matrix.julia_branch.name }}\n"
+          description: "Failed to rebase RelationalAI/julia branch `${{ matrix.julia_branch.name }}` branch on top of `${{ matrix.julia_branch.upstream}}`.\nPlease manually rebase ${{ matrix.julia_branch.name }}\nSee current diff between upstream branch here: ${{ matrix.julia_branch.comp_pr }}"
           user_email: ${{ secrets.JIRA_API_USER_EMAIL }}
           jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
           priority: "Medium"
