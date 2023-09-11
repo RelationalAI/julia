@@ -978,6 +978,21 @@ static void sweep_weak_refs(void)
 // Size includes the tag and the tag is not cleared!!
 static inline jl_value_t *jl_gc_big_alloc_inner(jl_ptls_t ptls, size_t sz)
 {
+    // 1TB allocated in SeparateCompilation bench through jemalloc
+    // get 1000 samples => 1 byte per 1G
+    double p = sz/1E+9;
+    if (rand() < p*RAND_MAX)
+    {
+        JL_TRY {
+            jl_error(""); // get a backtrace
+        }
+        JL_CATCH {
+            jl_printf((JL_STREAM*)STDERR_FILENO, "malloc sample: sz=%lld\n", (long long int)sz);
+            jlbacktrace(); // written to STDERR_FILENO
+            jl_printf((JL_STREAM*)STDERR_FILENO, "\n\n");
+        }
+    }
+
     maybe_collect(ptls);
     size_t offs = offsetof(bigval_t, header);
     assert(sz >= sizeof(jl_taggedvalue_t) && "sz must include tag");
