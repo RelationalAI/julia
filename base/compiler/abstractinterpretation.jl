@@ -3137,11 +3137,7 @@ function typeinf_local(interp::AbstractInterpreter, frame::InferenceState)
                 ssavaluetypes[currpc] = Any
                 continue
             end
-            if !isempty(frame.ssavalue_uses[currpc])
-                record_ssa_assign!(𝕃ᵢ, currpc, type, frame)
-            else
-                ssavaluetypes[currpc] = type
-            end
+            record_ssa_assign!(𝕃ᵢ, currpc, type, frame)
         end # for currpc in bbstart:bbend
 
         # Case 1: Fallthrough termination
