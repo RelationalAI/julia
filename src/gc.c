@@ -11,10 +11,6 @@
 extern "C" {
 #endif
 
-// Number of GC threads that may run parallel marking
-int jl_n_markthreads;
-// Number of GC threads that may run concurrent sweeping (0 or 1)
-int jl_n_sweepthreads;
 // `tid` of mutator thread that triggered GC
 _Atomic(int) gc_mutator_aux_tid;
 // `tid` of first GC thread
@@ -2875,7 +2871,7 @@ int64_t gc_estimate_mark_work_in_queue(jl_ptls_t ptls) JL_NOTSAFEPOINT
 int64_t gc_estimate_mark_work(void) JL_NOTSAFEPOINT
 {
     int64_t work = 0;
-    for (int i = gc_first_tid; i < gc_first_tid + jl_n_markthreads; i++) {
+    for (int i = gc_first_tid; i < gc_first_tid + jl_n_gcthreads; i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[i];
         work += gc_estimate_mark_work_in_queue(ptls2);
     }
@@ -2890,7 +2886,7 @@ int64_t gc_estimate_mark_work(void) JL_NOTSAFEPOINT
 int64_t gc_n_threads_marking_ub(void)
 {
     int64_t n_threads_marking_ub = 0;
-    for (int i = gc_first_tid; i < gc_first_tid + jl_n_markthreads; i++) {
+    for (int i = gc_first_tid; i < gc_first_tid + jl_n_gcthreads; i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[i];
         if (jl_atomic_load(&ptls2->gc_state) == JL_GC_STATE_PARALLEL) {
             n_threads_marking_ub++;
@@ -2914,7 +2910,7 @@ void gc_spin_master_sched(void)
     while (1) {
         int64_t n_threads_marking_ub = gc_n_threads_marking_ub();
         // all threads are already marking... can't recruit anyone else
-        if (n_threads_marking_ub == jl_n_markthreads) {
+        if (n_threads_marking_ub == jl_n_gcthreads) {
             jl_cpu_pause();
             continue;
         }
@@ -2927,7 +2923,7 @@ void gc_spin_master_sched(void)
         if (work >= n_threads_marking_ub * GC_MARK_WORK_TO_N_THREADS) {
             int64_t n_threads_marking_ideal = work / GC_MARK_WORK_TO_N_THREADS;
             // try to convert GC threads to workers
-            for (int i = gc_first_tid; i < gc_first_tid + jl_n_markthreads; i++) {
+            for (int i = gc_first_tid; i < gc_first_tid + jl_n_gcthreads; i++) {
                 jl_ptls_t ptls2 = gc_all_tls_states[i];
                 if (jl_atomic_load(&ptls2->gc_state) == JL_GC_STATE_WAITING) {
                     gc_wake_mark_thread(ptls2);
@@ -2959,7 +2955,7 @@ void gc_exp_backoff_sched(jl_ptls_t ptls)
 {
     // Wake threads up and try to do some work
     jl_atomic_fetch_add(&gc_n_threads_marking, 1);
-    for (int i = gc_first_tid; i < gc_first_tid + jl_n_markthreads; i++) {
+    for (int i = gc_first_tid; i < gc_first_tid + jl_n_gcthreads; i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[i];
         gc_wake_mark_thread(ptls2);
     }
@@ -2997,7 +2993,7 @@ STATIC_INLINE int gc_use_spin_master_sched(void)
 {
     // Use the spin master scheduler if there are at least 8 (7 GC + 1 mutator)
     // threads that are able to run the GC mark-loop
-    return (jl_n_markthreads >= 7);
+    return (jl_n_gcthreads >= 7);
 }
 
 void gc_mark_loop_worker(jl_ptls_t ptls)
