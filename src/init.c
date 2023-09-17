@@ -810,8 +810,8 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
 #pragma GCC diagnostic pop
     JL_GC_PROMISE_ROOTED(ct);
 #ifdef USE_PERFETTO
-    char *tfn = tmpnam(NULL);
-    assert(tfn != NULL);
+    char tfn[64];
+    sprintf(tfn, "perfetto-trace-%0d.json", getpid());
     tracef = fopen(tfn, "w");
     fprintf(stdout, "Writing Perfetto trace to %s\n", tfn);
     fprintf(tracef, "{\"traceEvents\":[\n");
