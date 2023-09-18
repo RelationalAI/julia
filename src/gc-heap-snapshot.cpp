@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <iostream>
 
 using std::vector;
 using std::string;
@@ -175,6 +176,12 @@ void _add_internal_root(HeapSnapshot *snapshot)
 // returns the index of the new node
 size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
 {
+    // static int count = 0;
+    // if (count < 10) {
+    //     count += 1;
+    //     std::cout << "Recording node: " << a << "\n";
+    // }
+
     auto val = g_snapshot->node_ptr_to_index_map.insert(make_pair(a, g_snapshot->nodes.size()));
     if (!val.second) {
         return val.first->second;
