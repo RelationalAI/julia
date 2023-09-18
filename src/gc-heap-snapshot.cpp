@@ -79,6 +79,29 @@ struct Node {
     ~Node() JL_NOTSAFEPOINT = default;
 };
 
+struct SidecarEdge {
+    string type;
+    string name_or_index; // name of the field (for objects/modules) or index of array
+};
+struct SidecarNode {
+    // How did you get here
+    SidecarEdge parent_to_me;
+
+    // If this is set, we've seen this node before, and we use this field. All other
+    // fields will be unset.
+    Node *node;
+
+    // Otherwise, this is a new, pending node, and we keep these fields to build the node
+    // if we end up sampling it.
+    StringRef node_type;
+    StringRef name;
+    size_t self_size;
+    size_t id; // This should be a globally-unique counter, but we use the memory address
+    // whether the from_node is attached or dettached from the main application state
+    // https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/include/v8-profiler.h#L739-L745
+    int detachedness;  // 0 - unknown, 1 - attached, 2 - detached
+};
+
 struct StringTable {
     StringMap<size_t> map;
     vector<StringRef> strings;
@@ -116,6 +139,13 @@ struct HeapSnapshot {
     DenseMap<void *, size_t> node_ptr_to_index_map;
 
     size_t num_edges = 0; // For metadata, updated as you add each edge. Needed because edges owned by nodes.
+
+    // Machinery to support _sampling_, to get a smaller heap snapshot file.
+
+    // We keep a sidecar DFS stack of the current mark path, so that if we ever decide to
+    // sample a node (which could be rare), we can fully reconstruct the path back to the
+    // root for every node that we sample.
+    vector<SidecarNode> current_stack;
 };
 
 // global heap snapshot, mutated by garbage collector
@@ -172,9 +202,7 @@ void _add_internal_root(HeapSnapshot *snapshot)
     snapshot->nodes.push_back(internal_root);
 }
 
-// mimicking https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/src/profiler/heap-snapshot-generator.cc#L597-L597
-// returns the index of the new node
-size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
+size_t record_node_to_gc_stack(jl_value_t *a) JL_NOTSAFEPOINT
 {
     // static int count = 0;
     // if (count < 10) {
@@ -182,112 +210,140 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
     //     std::cout << "Recording node: " << a << "\n";
     // }
 
+
+    // First, check to see if we already have a node for this
+    auto node_or_nothing = g_snapshot->node_ptr_to_index_map.find(a);
+    SidecarNode new_node;
+    if (node_or_nothing != g_snapshot->node_ptr_to_index_map.end()) {
+        new_node.node = &g_snapshot->nodes[node_or_nothing->second];
+    } else {
+        // Create a new node for this never-before-seen object
+
+        ios_t str_;
+        bool ios_need_close = 0;
+
+        size_t self_size = 0;
+        StringRef name = "<missing>";
+        StringRef node_type = "object";
+
+        jl_datatype_t *type = (jl_datatype_t*)jl_typeof(a);
+
+        if (jl_is_string(a)) {
+            node_type = "String";
+            name = jl_string_data(a);
+            self_size = jl_string_len(a);
+        }
+        else if (jl_is_symbol(a)) {
+            node_type = "jl_sym_t";
+            name = jl_symbol_name((jl_sym_t*)a);
+            self_size = name.size();
+        }
+        else if (jl_is_simplevector(a)) {
+            node_type = "jl_svec_t";
+            name = "SimpleVector";
+            self_size = sizeof(jl_svec_t) + sizeof(void*) * jl_svec_len(a);
+        }
+        else if (jl_is_module(a)) {
+            node_type = "jl_module_t";
+            name = jl_symbol_name_(((_jl_module_t*)a)->name);
+            self_size = sizeof(jl_module_t);
+        }
+        else if (jl_is_task(a)) {
+            node_type = "jl_task_t";
+            name = "Task";
+            self_size = sizeof(jl_task_t);
+        }
+        else if (jl_is_datatype(a)) {
+            ios_need_close = 1;
+            ios_mem(&str_, 0);
+            JL_STREAM* str = (JL_STREAM*)&str_;
+            jl_static_show(str, a);
+            name = StringRef((const char*)str_.buf, str_.size);
+            node_type = "jl_datatype_t";
+            self_size = sizeof(jl_datatype_t);
+        }
+        else if (jl_is_array(a)){
+            ios_need_close = 1;
+            ios_mem(&str_, 0);
+            JL_STREAM* str = (JL_STREAM*)&str_;
+            jl_static_show(str, (jl_value_t*)type);
+            name = StringRef((const char*)str_.buf, str_.size);
+            node_type = "jl_array_t";
+            self_size = sizeof(jl_array_t);
+        }
+        else {
+            self_size = (size_t)jl_datatype_size(type);
+            // print full type into ios buffer and get StringRef to it.
+            // The ios is cleaned up below.
+            ios_need_close = 1;
+            ios_mem(&str_, 0);
+            JL_STREAM* str = (JL_STREAM*)&str_;
+            jl_static_show(str, (jl_value_t*)type);
+
+            name = StringRef((const char*)str_.buf, str_.size);
+        }
+
+        new_node.node_type = node_type;
+        new_node.name = name;
+        // We add 1 to self-size for the type tag that all heap-allocated objects have.
+        // Also because the Chrome Snapshot viewer ignores size-0 leaves!
+        new_node.self_size = sizeof(void*) + self_size, // size_t self_size;
+        new_node.id = (size_t)a;
+        new_node.detachedness = 0; // 0 - unknown,  1 - attached;  2 - detached
+
+        if (ios_need_close) {
+            ios_close(&str_);
+        }
+    }
+    // Push the new node into the sidecar DFS stack.
+    g_snapshot->current_stack.push_back(new_node);
+    return g_snapshot->current_stack.size() - 1;
+}
+
+// Actually save the node to the snapshot.
+// mimicking https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/src/profiler/heap-snapshot-generator.cc#L597-L597
+// returns the index of the new node
+size_t publish_node_to_gc_snapshot(const SidecarNode &node) JL_NOTSAFEPOINT
+{
+    void *a = (void*)node.id;
+
     auto val = g_snapshot->node_ptr_to_index_map.insert(make_pair(a, g_snapshot->nodes.size()));
     if (!val.second) {
         return val.first->second;
     }
 
-    ios_t str_;
-    bool ios_need_close = 0;
-
     // Insert a new Node
-    size_t self_size = 0;
-    StringRef name = "<missing>";
-    StringRef node_type = "object";
-
-    jl_datatype_t *type = (jl_datatype_t*)jl_typeof(a);
-
-    if (jl_is_string(a)) {
-        node_type = "String";
-        name = jl_string_data(a);
-        self_size = jl_string_len(a);
-    }
-    else if (jl_is_symbol(a)) {
-        node_type = "jl_sym_t";
-        name = jl_symbol_name((jl_sym_t*)a);
-        self_size = name.size();
-    }
-    else if (jl_is_simplevector(a)) {
-        node_type = "jl_svec_t";
-        name = "SimpleVector";
-        self_size = sizeof(jl_svec_t) + sizeof(void*) * jl_svec_len(a);
-    }
-    else if (jl_is_module(a)) {
-        node_type = "jl_module_t";
-        name = jl_symbol_name_(((_jl_module_t*)a)->name);
-        self_size = sizeof(jl_module_t);
-    }
-    else if (jl_is_task(a)) {
-        node_type = "jl_task_t";
-        name = "Task";
-        self_size = sizeof(jl_task_t);
-    }
-    else if (jl_is_datatype(a)) {
-        ios_need_close = 1;
-        ios_mem(&str_, 0);
-        JL_STREAM* str = (JL_STREAM*)&str_;
-        jl_static_show(str, a);
-        name = StringRef((const char*)str_.buf, str_.size);
-        node_type = "jl_datatype_t";
-        self_size = sizeof(jl_datatype_t);
-    }
-    else if (jl_is_array(a)){
-        ios_need_close = 1;
-        ios_mem(&str_, 0);
-        JL_STREAM* str = (JL_STREAM*)&str_;
-        jl_static_show(str, (jl_value_t*)type);
-        name = StringRef((const char*)str_.buf, str_.size);
-        node_type = "jl_array_t";
-        self_size = sizeof(jl_array_t);
-    }
-    else {
-        self_size = (size_t)jl_datatype_size(type);
-        // print full type into ios buffer and get StringRef to it.
-        // The ios is cleaned up below.
-        ios_need_close = 1;
-        ios_mem(&str_, 0);
-        JL_STREAM* str = (JL_STREAM*)&str_;
-        jl_static_show(str, (jl_value_t*)type);
-
-        name = StringRef((const char*)str_.buf, str_.size);
-    }
-
     g_snapshot->nodes.push_back(Node{
-        g_snapshot->node_types.find_or_create_string_id(node_type), // size_t type;
-        g_snapshot->names.find_or_create_string_id(name), // size_t name;
+        g_snapshot->node_types.find_or_create_string_id(node.node_type), // size_t type;
+        g_snapshot->names.find_or_create_string_id(node.name), // size_t name;
         (size_t)a,     // size_t id;
-        // We add 1 to self-size for the type tag that all heap-allocated objects have.
-        // Also because the Chrome Snapshot viewer ignores size-0 leaves!
-        sizeof(void*) + self_size, // size_t self_size;
+        node.self_size, // size_t self_size;
         0,             // size_t trace_node_id (unused)
-        0,             // int detachedness;  // 0 - unknown,  1 - attached;  2 - detached
+        node.detachedness,  // int detachedness;  // 0 - unknown,  1 - attached;  2 - detached
         vector<Edge>() // outgoing edges
     });
-
-    if (ios_need_close)
-        ios_close(&str_);
 
     return val.first->second;
 }
 
-static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef name) JL_NOTSAFEPOINT
+static size_t record_pointer_to_gc_stack(void *a, size_t bytes, StringRef name) JL_NOTSAFEPOINT
 {
-    auto val = g_snapshot->node_ptr_to_index_map.insert(make_pair(a, g_snapshot->nodes.size()));
-    if (!val.second) {
-        return val.first->second;
-    }
+    // First, check to see if we already have a node for this
+    auto node_or_nothing = g_snapshot->node_ptr_to_index_map.find(a);
+    SidecarNode new_node;
+    if (node_or_nothing != g_snapshot->node_ptr_to_index_map.end()) {
+        new_node.node = &g_snapshot->nodes[node_or_nothing->second];
+    } else {
+        new_node.node_type = StringRef("object");
+        new_node.name = name;
+        new_node.id = (size_t)a;
+        new_node.self_size = bytes;
+        new_node.detachedness = 0;  // 0 - unknown,  1 - attached;  2 - detached
+    };
 
-    g_snapshot->nodes.push_back(Node{
-        g_snapshot->node_types.find_or_create_string_id( "object"), // size_t type;
-        g_snapshot->names.find_or_create_string_id(name), // size_t name;
-        (size_t)a,     // size_t id;
-        bytes,         // size_t self_size;
-        0,             // size_t trace_node_id (unused)
-        0,             // int detachedness;  // 0 - unknown,  1 - attached;  2 - detached
-        vector<Edge>() // outgoing edges
-    });
-
-    return val.first->second;
+    // Push the new node into the sidecar DFS stack.
+    g_snapshot->current_stack.push_back(new_node);
+    return g_snapshot->current_stack.size() - 1;
 }
 
 static string _fieldpath_for_slot(void *obj, void *slot) JL_NOTSAFEPOINT
@@ -324,7 +380,7 @@ static string _fieldpath_for_slot(void *obj, void *slot) JL_NOTSAFEPOINT
 
 void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT
 {
-    record_node_to_gc_snapshot(root);
+    size_t node_idx = record_node_to_gc_stack(root);
 
     auto &internal_root = g_snapshot->nodes.front();
     auto to_node_idx = g_snapshot->node_ptr_to_index_map[root];
@@ -464,7 +520,7 @@ static inline void _record_gc_edge(const char *edge_type, jl_value_t *a,
     _record_gc_just_edge(edge_type, from_node, to_node_idx, name_or_idx);
 }
 
-void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT
+void _record_gc_just_edge(const char *edge_type, SidecarNode &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT
 {
     from_node.edges.push_back(Edge{
         g_snapshot->edge_types.find_or_create_string_id(edge_type),
