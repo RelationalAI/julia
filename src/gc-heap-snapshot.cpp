@@ -80,8 +80,8 @@ struct Node {
 };
 
 struct SidecarEdge {
-    string type;
-    string name_or_index; // name of the field (for objects/modules) or index of array
+    StringRef type;
+    StringRef name_or_index; // name of the field (for objects/modules) or index of array
 };
 struct SidecarNode {
     // How did you get here
@@ -141,6 +141,8 @@ struct HeapSnapshot {
     size_t num_edges = 0; // For metadata, updated as you add each edge. Needed because edges owned by nodes.
 
     // Machinery to support _sampling_, to get a smaller heap snapshot file.
+
+    // TODO: Set up the uber root in the gc stack
 
     // We keep a sidecar DFS stack of the current mark path, so that if we ever decide to
     // sample a node (which could be rare), we can fully reconstruct the path back to the
@@ -377,16 +379,29 @@ static string _fieldpath_for_slot(void *obj, void *slot) JL_NOTSAFEPOINT
     }
 }
 
+void _publish_edge(const SidecarNode& from, const SidecarNode &to, const SidecarEdge &edge) JL_NOTSAFEPOINT
+{
+    auto from_node_idx = publish_node_to_gc_snapshot(from);
+    auto to_node_idx = publish_node_to_gc_snapshot(to);
+    auto edge_label = g_snapshot->names.find_or_create_string_id(edge.name);
+
+    _publish_gc_just_edge("internal", from_node_idx, to_node_idx, edge_label);
+}
 
 void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT
 {
-    size_t node_idx = record_node_to_gc_stack(root);
+    size_t to_node_idx = record_node_to_gc_stack(root);
 
-    auto &internal_root = g_snapshot->nodes.front();
-    auto to_node_idx = g_snapshot->node_ptr_to_index_map[root];
-    auto edge_label = g_snapshot->names.find_or_create_string_id(name);
 
-    _record_gc_just_edge("internal", internal_root, to_node_idx, edge_label);
+    // Create the edge to the new root
+    SidecarEdge edge {
+        "internal", // type
+        name, // label
+    };
+
+    // Set the edge in the new node:
+    auto &new_node = g_snapshot->current_stack.back();
+    new_node.parent_to_me = edge;
 }
 
 // Add a node to the heap snapshot representing a Julia stack frame.
@@ -395,22 +410,22 @@ void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT
 // Stack frame nodes point at the objects they have as local variables.
 size_t _record_stack_frame_node(HeapSnapshot *snapshot, void *frame) JL_NOTSAFEPOINT
 {
-    auto val = g_snapshot->node_ptr_to_index_map.insert(make_pair(frame, g_snapshot->nodes.size()));
-    if (!val.second) {
-        return val.first->second;
-    }
+    // First, check to see if we already have a node for this
+    auto node_or_nothing = g_snapshot->node_ptr_to_index_map.find(frame);
+    SidecarNode new_node;
+    if (node_or_nothing != g_snapshot->node_ptr_to_index_map.end()) {
+        new_node.node = &g_snapshot->nodes[node_or_nothing->second];
+    } else {
+        new_node.node_type = StringRef("synthetic");
+        new_node.name = "(stack frame)";
+        new_node.id = (size_t)frame;
+        new_node.self_size = 1;
+        new_node.detachedness = 0;  // 0 - unknown,  1 - attached;  2 - detached
+    };
 
-    snapshot->nodes.push_back(Node{
-        snapshot->node_types.find_or_create_string_id("synthetic"),
-        snapshot->names.find_or_create_string_id("(stack frame)"), // name
-        (size_t)frame, // id
-        1, // size
-        0, // size_t trace_node_id (unused)
-        0, // int detachedness;  // 0 - unknown,  1 - attached;  2 - detached
-        vector<Edge>() // outgoing edges
-    });
-
-    return val.first->second;
+    // Push the new node into the sidecar DFS stack.
+    g_snapshot->current_stack.push_back(new_node);
+    return g_snapshot->current_stack.size() - 1;
 }
 
 void _gc_heap_snapshot_record_frame_to_object_edge(void *from, jl_value_t *to) JL_NOTSAFEPOINT
@@ -520,7 +535,7 @@ static inline void _record_gc_edge(const char *edge_type, jl_value_t *a,
     _record_gc_just_edge(edge_type, from_node, to_node_idx, name_or_idx);
 }
 
-void _record_gc_just_edge(const char *edge_type, SidecarNode &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT
+void _publish_gc_just_edge(const char *edge_type, SidecarNode &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT
 {
     from_node.edges.push_back(Edge{
         g_snapshot->edge_types.find_or_create_string_id(edge_type),
