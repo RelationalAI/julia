@@ -23,6 +23,9 @@ uv_cond_t gc_threads_cond;
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
 
+// Cache line size
+unsigned cache_line_size;
+
 // Linked list of callback functions
 
 typedef void (*jl_gc_cb_func_t)(void);
@@ -1575,6 +1578,9 @@ static jl_taggedvalue_t **gc_sweep_page(jl_gc_pool_t *p, jl_gc_pagemeta_t **allo
             int bits = v->bits.gc;
             // if an object is past `lim_newpages` then we can guarantee it's garbage
             if (!gc_marked(bits) || (char*)v >= lim_newpages) {
+            #ifdef GC_PAGE_LINUX_INTROSPECT
+                memset(v, 0, pg->osize);
+            #endif
                 *pfl = v;
                 pfl = &v->next;
                 pfl_begin = pfl_begin ? pfl_begin : pfl;
@@ -1680,6 +1686,55 @@ static void gc_pool_sync_nfree(jl_gc_pagemeta_t *pg, jl_taggedvalue_t *last) JL_
     pg->nfree = nfree;
 }
 
+static int resident_pages;
+static int n_pages;
+
+static void gc_introspect_all_pages_in_list(jl_gc_pagemeta_t *pg)
+{
+    while (pg != NULL) {
+        uint8_t status = gc_alloc_map_get_status(pg->data);
+        unsigned n_os_pages = GC_PAGE_SZ / OS_PAGE_SZ; // exact division
+        for (unsigned i = 0; i < n_os_pages; i++) {
+            introspect_gc_page(pg->data + i * OS_PAGE_SZ, &pg->linux_metadata, status);
+            n_pages++;
+            if (pg->linux_metadata.resident) {
+                resident_pages++;
+            }
+            dump_linux_metadata(&pg->linux_metadata, status);
+        }
+        pg = pg->next;
+    }
+}
+
+static void gc_introspect_all_pages(void)
+{
+#ifdef GC_PAGE_LINUX_INTROSPECT
+    resident_pages = 0;
+    n_pages = 0;
+    jl_gc_pagemeta_t *pg = NULL;
+    // walk `global_page_pool_freed`
+    pg = jl_atomic_load_relaxed(&global_page_pool_freed.page_metadata_back);
+    gc_introspect_all_pages_in_list(pg);
+    // walk `global_page_pool_clean`
+    pg = jl_atomic_load_relaxed(&global_page_pool_clean.page_metadata_back);
+    gc_introspect_all_pages_in_list(pg);
+    for (int i = 0; i < gc_n_threads; i++) {
+        jl_ptls_t ptls2 = gc_all_tls_states[i];
+        if (ptls2 == NULL) {
+            continue;
+        }
+        // walk allocated pages
+        pg = ptls2->page_metadata_allocd;
+        gc_introspect_all_pages_in_list(pg);
+        // walk lazily freed pages
+        pg = ptls2->page_metadata_lazily_freed;
+        gc_introspect_all_pages_in_list(pg);
+    }
+    jl_safe_printf("%d resident pages out of %d pages in control by the pool allocator\n", resident_pages, n_pages);
+    jl_safe_printf("==========\n");
+#endif
+}
+
 // setup the data-structures for a sweep over all memory pools
 static void gc_sweep_pool(int sweep_full)
 {
@@ -1761,6 +1816,7 @@ static void gc_sweep_pool(int sweep_full)
         }
     }
 
+    gc_introspect_all_pages();
     gc_time_pool_end(sweep_full);
 }
 
@@ -3651,6 +3707,8 @@ void jl_gc_init(void)
     arraylist_new(&eytzinger_idxs, 0);
     arraylist_push(&eytzinger_idxs, (void*)0);
     arraylist_push(&eytzinger_image_tree, (void*)1); // outside image
+
+    find_cache_line_size();
 
     gc_num.interval = default_collect_interval;
     last_long_collect_interval = default_collect_interval;

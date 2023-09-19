@@ -146,6 +146,87 @@ typedef struct _mallocarray_t {
     struct _mallocarray_t *next;
 } mallocarray_t;
 
+#if defined(_OS_LINUX_)
+
+#define GC_PAGE_LINUX_INTROSPECT
+#include <stdio.h>
+#include <sys/mman.h>
+
+#define OS_PAGE_SZ (1 << 12)
+extern unsigned cache_line_size;
+
+// adapted from `https://github.com/NickStrupat/CacheLineSize` (MIT License)
+STATIC_INLINE void find_cache_line_size(void) {
+    FILE * p = 0;
+    p = fopen("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size", "r");
+    if (p) {
+        fscanf(p, "%u", &cache_line_size);
+        fclose(p);
+    }
+}
+
+// page metadata filled with system info only
+// applicable to linux
+typedef struct {
+    char *page_start;
+    int resident;
+    int zeroed_cache_lines;
+} jl_gc_linux_pagemeta_t;
+
+STATIC_INLINE void introspect_gc_page(char *addr, jl_gc_linux_pagemeta_t *linux_pg, int status)
+{
+    linux_pg->page_start = addr;
+    // check if page is resident
+    unsigned char v;
+    if (mincore(addr, OS_PAGE_SZ, &v) == -1) {
+        abort(); // bad, really bad...
+    }
+    linux_pg->resident = v;
+    linux_pg->zeroed_cache_lines = 0;
+    if (status != 1) { // GC_PAGE_ALLOCATED
+        return;
+    }
+    // compute number of zeroed cache lines
+    unsigned n_cache_lines = (OS_PAGE_SZ / cache_line_size); // exact division
+    for (unsigned i = 0; i < n_cache_lines; i++) {
+        int zeroed_cache_line = 1;
+        for (unsigned j = 0; j < cache_line_size; j++) {
+            char *pbyte = addr + i * cache_line_size + j;
+            if (*pbyte != 0) {
+                zeroed_cache_line = 0;
+                break;
+            }
+        }
+        if (zeroed_cache_line) {
+            linux_pg->zeroed_cache_lines++;
+        }
+    }
+}
+
+STATIC_INLINE void dump_linux_metadata(jl_gc_linux_pagemeta_t *linux_pg, int status)
+{
+    switch (status) {
+    case 1: // GC_PAGE_ALLOCATED
+        jl_safe_printf("page_start=%p::zeroed_cache_lines=%d::resident=%d\n",
+            linux_pg->page_start, linux_pg->zeroed_cache_lines, linux_pg->resident);
+        return;
+    case 0: // GC_PAGE_UNMAPPED
+    case 2: // GC_PAGE_LAZILY_FREED
+    case 3: // GC_PAGE_FREED
+        jl_safe_printf("page_start=%p::resident=%d\n",
+            linux_pg->page_start, linux_pg->resident);
+        return;
+    default:
+        abort();
+    }
+}
+
+#else
+
+STATIC_INLINE void find_cache_line_size(void) {}
+
+#endif
+
 // pool page metadata
 typedef struct _jl_gc_pagemeta_t {
     // next metadata structure in per-thread list
@@ -183,6 +264,9 @@ typedef struct _jl_gc_pagemeta_t {
     uint16_t thread_n;        // thread id of the heap that owns this page
     char *data;
     uint8_t *ages;
+#if defined(_OS_LINUX_)
+    jl_gc_linux_pagemeta_t linux_metadata;
+#endif
 } jl_gc_pagemeta_t;
 
 typedef struct {
@@ -274,6 +358,22 @@ typedef struct {
 #define GC_PAGE_FREED           3
 
 extern pagetable_t alloc_map;
+
+STATIC_INLINE uint8_t gc_alloc_map_get_status(char *_data) JL_NOTSAFEPOINT
+{
+    uintptr_t data = ((uintptr_t)_data);
+    unsigned i;
+    i = REGION_INDEX(data);
+    pagetable1_t *r1 = alloc_map.meta1[i];
+    if (r1 == NULL)
+        return 0;
+    i = REGION1_INDEX(data);
+    pagetable0_t *r0 = r1->meta0[i];
+    if (r0 == NULL)
+        return 0;
+    i = REGION0_INDEX(data);
+    return r0->meta[i];
+}
 
 STATIC_INLINE uint8_t gc_alloc_map_is_set(char *_data) JL_NOTSAFEPOINT
 {
