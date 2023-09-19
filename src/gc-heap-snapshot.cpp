@@ -76,6 +76,9 @@ struct Node {
     int detachedness;  // 0 - unknown, 1 - attached, 2 - detached
     vector<Edge> edges;
 
+    // This is used for the sampling, at the end.
+    vector<Edge> sampled_edges;
+
     ~Node() JL_NOTSAFEPOINT = default;
 };
 
@@ -118,6 +121,7 @@ struct HeapSnapshot {
     DenseMap<void *, size_t> node_ptr_to_index_map;
 
     size_t num_edges = 0; // For metadata, updated as you add each edge. Needed because edges owned by nodes.
+    size_t num_roots = 0;
 };
 
 // global heap snapshot, mutated by garbage collector
@@ -326,6 +330,8 @@ void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT
 {
     record_node_to_gc_snapshot(root);
 
+    g_snapshot->num_roots++;
+
     auto &internal_root = g_snapshot->nodes.front();
     auto to_node_idx = g_snapshot->node_ptr_to_index_map[root];
     auto edge_label = g_snapshot->names.find_or_create_string_id(name);
@@ -498,8 +504,13 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
 
     // First, sample nodes
     vector<size_t> sampled_node_idxs;
+    // Always include the roots
+    for (size_t i = 0; i < snapshot.num_roots; i++) {
+        sampled_node_idxs.push_back(i);
+    }
+    // Then sample all other nodes
     size_t num_nodes = snapshot.nodes.size();
-    for (size_t i = 0; i < num_nodes; i++) {
+    for (size_t i = snapshot.num_roots; i < num_nodes; i++) {
         auto r = (static_cast<double>(rand()) / static_cast<double>(RAND_MAX));
         if (r <= sample_rate) {
             sampled_node_idxs.push_back(i);
@@ -514,58 +525,86 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
     }
 
     // Then, find all the parent nodes and edges reachable from those sampled nodes
-    DenseMap<size_t, Node> node_id_to_node_map;
+    DenseMap<size_t, size_t> node_id_to_new_node_idx_map;
+    vector<Node> new_nodes;
     for (auto node_idx : sampled_node_idxs) {
         int depth = 0;
+        Node *parent_ptr = nullptr;
         while (true) {
             depth += 1;
             auto &node = snapshot.nodes[node_idx];
-            auto parent_node_pair = snapshot.node_parents.find(node_idx);
-            if (parent_node_pair == snapshot.node_parents.end()) {
+            // If we've already added this node, we can stop adding this whole chain, since
+            // we've already done this node and all its parents to the root.
+            if (node_id_to_new_node_idx_map.count(node.id) > 0) {
+                //std::cout << "Already seen: " << snapshot.names.strings[node.name].str() << std::endl;
                 break;
             }
+            // Copy in the newly sampled node
+            new_nodes.push_back(node);
+            auto new_node_idx = new_nodes.size()-1;
+            node_id_to_new_node_idx_map.insert(make_pair(node.id, new_node_idx));
+            auto &new_node = new_nodes.back();
+
+            // If the node has a parent, we add an edge from it to us.
+            auto parent_node_pair = snapshot.node_parents.find(node_idx);
+            if (parent_node_pair == snapshot.node_parents.end()) {
+                // std::cout << "No more parent: " << snapshot.names.strings[node.name].str() << std::endl;
+                break;
+            }
+
+            // Now update the parent's _final sampled edges_ to point to the new node.
             auto parent_idx = parent_node_pair->second;
             auto &parent = snapshot.nodes[parent_idx];
-            node_id_to_node_map.insert(make_pair(node.id, node));
-            auto &new_node = node_id_to_node_map[node.id];
-            node_id_to_node_map.insert(make_pair(parent.id, parent));
-            auto &new_parent = node_id_to_node_map[parent.id];
-            for (auto &edge : node.edges) {
+            parent_ptr = &parent;
+            // Copy in the edges that point from parent to the new node.
+            for (auto &edge : parent.edges) {
                 if (edge.to_node == node_idx) {
-                    new_node.edges.push_back(edge);
+                    edge.to_node = new_node_idx;
+                    parent.sampled_edges.push_back(edge);
                 }
             }
+            // Continue up to the parent, until we hit a root.
             node_idx = parent_idx;
         }
+        // if (parent_ptr != nullptr) {
+        //     std::cout << snapshot.names.strings[parent_ptr->name].str() << std::endl;
+        // }
         //std::cout << depth << std::endl;
     }
-    std::cout << node_id_to_node_map.size() << " nodes in downsampled snapshot\n";
+    std::cout << new_nodes.size() << " nodes in downsampled snapshot\n";
+    assert(new_nodes.size() == node_id_to_new_node_idx_map.size());
 
-    // Now replace the snapshot's nodes with the values from node_id_to_node_map.
-    snapshot.nodes.clear();
     // Since we now reinsert all the nodes into a smaller array, we need to update
-    // all the indices in the edges. We'll repurpose the `node_parents` map for to save space.
-    snapshot.node_parents.clear();
-    for (auto &iter : node_id_to_node_map) {
-        auto &node = iter.second;
-        auto &node_idx = snapshot.node_ptr_to_index_map[(void*)node.id];
-        snapshot.node_parents.insert(make_pair(node_idx, snapshot.nodes.size()));
+    // all the indices in the edges.
+    for (auto &node : new_nodes) {
+        // NOTE: We have decided here to keep *all edges* between the sampled nodes,
+        // as opposed to only keeping the paths from the sampled nodes up to the roots.
+        // This is useful, because our snapshot still isn't perfect, and often there are
+        // gaps between a node and its path to the root. This allows us to capture a more
+        // complete picture of Containment.
+        // The tradeoff is that the cost to record the snapshot is higher, and the snapshot
+        // is larger.
+        for (auto &edge : node.edges) {
+            size_t old_to_id = snapshot.nodes[edge.to_node].id;
+            // If the edge points to one of the sampled nodes, keep it.
+            auto iter = node_id_to_new_node_idx_map.find(old_to_id);
+            if (iter == node_id_to_new_node_idx_map.end()) {
+                continue;
+            }
+            size_t new_to_node_idx = iter->second;
+            edge.to_node = new_to_node_idx;
+            node.sampled_edges.push_back(edge);
+        }
+
+        // Keep only the sampled edges.
+        std::swap(node.edges, node.sampled_edges);
+        node.sampled_edges.clear();
+        // Keep the new node.
         snapshot.nodes.push_back(node);
     }
-    
-    for (auto &node : snapshot.nodes) {
-        // Now we actually update the edge indices. If the node is not in the map,
-        // then it was not sampled, and we should remove the corresponding edge.
-        vector<Edge> new_edges;
-        for (auto &edge : node.edges) {
-            auto iter = snapshot.node_parents.find(edge.to_node);
-            if (iter != snapshot.node_parents.end()) {
-                edge.to_node = iter->second;
-                new_edges.push_back(edge);
-            }
-        }
-        node.edges = new_edges;
-    }
+    // Now replace the snapshot's nodes with the values from node_id_to_node_map.
+    snapshot.nodes = std::move(new_nodes);
+
     std::cout << snapshot.nodes.size() << " nodes in downsampled snapshot\n";
 
 }
@@ -613,6 +652,7 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
 
     ios_printf(stream, "\"edges\":[");
     bool first_edge = true;
+    int num_edges = 0;
     for (const auto &from_node : snapshot.nodes) {
         for (const auto &edge : from_node.edges) {
             if (first_edge) {
@@ -625,8 +665,10 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
                                 edge.type,
                                 edge.name_or_index,
                                 edge.to_node * k_node_number_of_fields);
+            num_edges += 1;
         }
     }
+    std::cout << num_edges << " edges in snapshot\n";
     ios_printf(stream, "],\n"); // end "edges"
 
     ios_printf(stream, "\"strings\":");
