@@ -543,8 +543,28 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
 
     // Now replace the snapshot's nodes with the values from node_id_to_node_map.
     snapshot.nodes.clear();
+    // Since we now reinsert all the nodes into a smaller array, we need to update
+    // all the indices in the edges. We'll repurpose the `node_parents` map for to save space.
+    snapshot.node_parents.clear();
     for (auto &iter : node_id_to_node_map) {
-        snapshot.nodes.push_back(iter.second);
+        auto &node = iter.second;
+        auto &node_idx = snapshot.node_ptr_to_index_map[(void*)node.id];
+        snapshot.node_parents.insert(make_pair(node_idx, snapshot.nodes.size()));
+        snapshot.nodes.push_back(node);
+    }
+    
+    for (auto &node : snapshot.nodes) {
+        // Now we actually update the edge indices. If the node is not in the map,
+        // then it was not sampled, and we should remove the corresponding edge.
+        vector<Edge> new_edges;
+        for (auto &edge : node.edges) {
+            auto iter = snapshot.node_parents.find(edge.to_node);
+            if (iter != snapshot.node_parents.end()) {
+                edge.to_node = iter->second;
+                new_edges.push_back(edge);
+            }
+        }
+        node.edges = new_edges;
     }
     std::cout << snapshot.nodes.size() << " nodes in downsampled snapshot\n";
 
