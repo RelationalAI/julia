@@ -127,14 +127,14 @@ HeapSnapshot *g_snapshot = nullptr;
 extern jl_mutex_t heapsnapshot_lock;
 
 void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one);
-void downsample_heap_snapshot(HeapSnapshot &snapshot);
+void downsample_heap_snapshot(HeapSnapshot &snapshot, double);
 static inline void _record_gc_edge(const char *edge_type,
                                    jl_value_t *a, jl_value_t *b, size_t name_or_index) JL_NOTSAFEPOINT;
 void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT;
 void _add_internal_root(HeapSnapshot *snapshot);
 
 
-JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one)
+JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one, double sample_rate)
 {
     HeapSnapshot snapshot;
     _add_internal_root(&snapshot);
@@ -155,7 +155,7 @@ JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one)
     jl_mutex_unlock(&heapsnapshot_lock);
 
     // Prune snapshot down via sampling
-    downsample_heap_snapshot(snapshot);
+    downsample_heap_snapshot(snapshot, sample_rate);
 
     // When we return, the snapshot is full
     // Dump the snapshot
@@ -477,7 +477,7 @@ void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx,
     g_snapshot->num_edges += 1;
 }
 
-void downsample_heap_snapshot(HeapSnapshot &snapshot) {
+void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
     // Downsample the heap snapshot by randomly sampling 1/1000th of the nodes, and then
     // keeping all the edges and nodes from those nodes up to the roots. This is a
     // simple way to get a representative sample of the heap.
@@ -486,7 +486,13 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot) {
     // still take the node, and we'll just keep all nodes going up from it until we reach
     // a dead end.
 
+    std::cout << "Downsampling heap snapshot, sample rate: " << sample_rate << "\n";
     std::cout << snapshot.nodes.size() << " original nodes\n";
+
+    if (sample_rate >= 1.0) {
+        std::cout << "Nothing to do." << "\n";
+        return;
+    }
 
     //HeapSnapshot &snapshot
 
@@ -494,17 +500,25 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot) {
     vector<size_t> sampled_node_idxs;
     size_t num_nodes = snapshot.nodes.size();
     for (size_t i = 0; i < num_nodes; i++) {
-        if (rand() % 100 == 0) {
+        auto r = (static_cast<double>(rand()) / static_cast<double>(RAND_MAX));
+        if (r <= sample_rate) {
             sampled_node_idxs.push_back(i);
         }
     }
 
     std::cout << sampled_node_idxs.size() << " sampled nodes\n";
 
+    if (sampled_node_idxs.size() >= 100000) {
+        std::cout << "Skipping sampling, it would be too slow. Pick a smaller sample size!\n";
+        return;
+    }
+
     // Then, find all the parent nodes and edges reachable from those sampled nodes
     DenseMap<size_t, Node> node_id_to_node_map;
     for (auto node_idx : sampled_node_idxs) {
+        int depth = 0;
         while (true) {
+            depth += 1;
             auto &node = snapshot.nodes[node_idx];
             auto parent_node_pair = snapshot.node_parents.find(node_idx);
             if (parent_node_pair == snapshot.node_parents.end()) {
@@ -523,6 +537,7 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot) {
             }
             node_idx = parent_idx;
         }
+        //std::cout << depth << std::endl;
     }
     std::cout << node_id_to_node_map.size() << " nodes in downsampled snapshot\n";
 
