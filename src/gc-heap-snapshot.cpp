@@ -1,3 +1,35 @@
+/*
+
+TODO: Some are working, like these first two, but some don't are missing the parents:
+
+Got 5006181472 but current tip is 4975667600
+Publishing trace!
+0:  uber root
+5006181360:
+5006181424:  SimpleVector
+5006181472:  Union
+4975667600:  ctor�
+
+Got 4988628160 but current tip is 5059787056
+Publishing trace!
+0:  uber root
+4988628160:  Core.MethodInstance
+5059787056:  SimpleVector
+
+Got 4982496048 but current tip is 4380676456
+Publishing trace!
+0:  uber root
+4380676456:  SecretBuffer
+
+
+*/
+
+
+
+
+
+
+
 // This file is a part of Julia. License is MIT: https://julialang.org/license
 
 #include "gc-heap-snapshot.h"
@@ -81,8 +113,17 @@ struct Node {
 
 struct SidecarEdge {
     StringRef type;
-    StringRef name_or_index; // name of the field (for objects/modules) or index of array
+    StringRef name; // name of the field (for objects/modules) or index of array
+    int index;
 };
+SidecarEdge make_sidecar_edge(StringRef type, StringRef name) JL_NOTSAFEPOINT
+{
+    return SidecarEdge{type, name, -1};
+}
+SidecarEdge make_sidecar_edge(StringRef type, int index) JL_NOTSAFEPOINT
+{
+    return SidecarEdge{type, StringRef(), index};
+}
 struct SidecarNode {
     // How did you get here
     SidecarEdge parent_to_me;
@@ -142,8 +183,6 @@ struct HeapSnapshot {
 
     // Machinery to support _sampling_, to get a smaller heap snapshot file.
 
-    // TODO: Set up the uber root in the gc stack
-
     // We keep a sidecar DFS stack of the current mark path, so that if we ever decide to
     // sample a node (which could be rare), we can fully reconstruct the path back to the
     // root for every node that we sample.
@@ -159,9 +198,18 @@ extern jl_mutex_t heapsnapshot_lock;
 void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one);
 static inline void _record_gc_edge(const char *edge_type,
                                    jl_value_t *a, jl_value_t *b, size_t name_or_index) JL_NOTSAFEPOINT;
-void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT;
+//void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT;
+void _publish_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT;
 void _add_internal_root(HeapSnapshot *snapshot);
 
+size_t get_name_or_index(HeapSnapshot *snapshot, const SidecarEdge &edge) JL_NOTSAFEPOINT
+{
+    if (edge.index != -1) {
+        return edge.index;
+    } else {
+        return (size_t)snapshot->names.find_or_create_string_id(edge.name);
+    }
+}
 
 JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one)
 {
@@ -202,7 +250,50 @@ void _add_internal_root(HeapSnapshot *snapshot)
         vector<Edge>() // outgoing edges
     };
     snapshot->nodes.push_back(internal_root);
+
+    // Set up the uber root in the GC stack
+    SidecarNode uber_root;
+    uber_root.node = &snapshot->nodes[0];
+    uber_root.name = "uber root";
+    snapshot->current_stack.push_back(uber_root);
 }
+
+void update_parent_in_stack(HeapSnapshot *snapshot, size_t parent_id) JL_NOTSAFEPOINT
+{
+    // If the new node isn't a child of the current back of the stack, the back of the stack
+    // is a *leaf*, and we've finished this trace. Decide whether to sample the node, and
+    // if so, publish it, and then pop the stack until we find a node that matches the
+    // new node's parent.
+    if (g_snapshot->current_stack.back().id != parent_id) {
+        static int first = 10;
+        // TODO: Sampling
+        if (first > 0 || rand() % 100000 == 0) {
+
+            first--;
+            // TODO: Publish the stack trace
+            std::cout << "Got " << parent_id << " but current tip is " << g_snapshot->current_stack.back().id << "\n";
+
+            std::cout << "Publishing trace!\n";
+            for (auto &node : g_snapshot->current_stack) {
+                std::cout << node.id << ":  " << node.parent_to_me.name.str() << " -> " << node.name.str() << "\n";
+            }
+            std::cout << std::endl;
+        }
+
+        // Now, clear out all the nodes on the stack until we find the parent
+        while (g_snapshot->current_stack.size() > 1 &&
+                g_snapshot->current_stack.back().id != parent_id) {
+            g_snapshot->current_stack.pop_back();
+        }
+    }
+}
+
+size_t _push_new_gc_stack_node(const SidecarNode &node) JL_NOTSAFEPOINT
+{
+    g_snapshot->current_stack.push_back(node);
+    return g_snapshot->current_stack.size() - 1;
+}
+
 
 size_t record_node_to_gc_stack(jl_value_t *a) JL_NOTSAFEPOINT
 {
@@ -298,8 +389,7 @@ size_t record_node_to_gc_stack(jl_value_t *a) JL_NOTSAFEPOINT
         }
     }
     // Push the new node into the sidecar DFS stack.
-    g_snapshot->current_stack.push_back(new_node);
-    return g_snapshot->current_stack.size() - 1;
+    return _push_new_gc_stack_node(new_node);
 }
 
 // Actually save the node to the snapshot.
@@ -383,24 +473,35 @@ void _publish_edge(const SidecarNode& from, const SidecarNode &to, const Sidecar
 {
     auto from_node_idx = publish_node_to_gc_snapshot(from);
     auto to_node_idx = publish_node_to_gc_snapshot(to);
-    auto edge_label = g_snapshot->names.find_or_create_string_id(edge.name);
+    auto edge_label = get_name_or_index(g_snapshot, edge);
 
-    _publish_gc_just_edge("internal", from_node_idx, to_node_idx, edge_label);
+    auto &from_node = g_snapshot->nodes[from_node_idx];
+
+    _publish_gc_just_edge("internal", from_node, to_node_idx, edge_label);
 }
+
+void _record_just_edge_to_gc_stack(size_t to_idx, const SidecarEdge &edge) JL_NOTSAFEPOINT
+{
+    assert(to_idx == g_snapshot->current_stack.size() - 1);
+    g_snapshot->current_stack.back().parent_to_me = edge;
+}
+
 
 void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT
 {
+    std::cout << "Recording root: " << (size_t)root << " name: " << name << "\n\n";
+
     size_t to_node_idx = record_node_to_gc_stack(root);
 
 
     // Create the edge to the new root
-    SidecarEdge edge {
-        "internal", // type
-        name, // label
-    };
+    SidecarEdge edge = make_sidecar_edge(
+        StringRef("internal"), // type
+        StringRef(name) // label
+    );
 
     // Set the edge in the new node:
-    auto &new_node = g_snapshot->current_stack.back();
+    auto &new_node = g_snapshot->current_stack[to_node_idx];
     new_node.parent_to_me = edge;
 }
 
@@ -430,32 +531,23 @@ size_t _record_stack_frame_node(HeapSnapshot *snapshot, void *frame) JL_NOTSAFEP
 
 void _gc_heap_snapshot_record_frame_to_object_edge(void *from, jl_value_t *to) JL_NOTSAFEPOINT
 {
-    auto from_node_idx = _record_stack_frame_node(g_snapshot, (jl_gcframe_t*)from);
-    auto to_idx = record_node_to_gc_snapshot(to);
-    Node &from_node = g_snapshot->nodes[from_node_idx];
-
-    auto name_idx = g_snapshot->names.find_or_create_string_id("local var");
-    _record_gc_just_edge("internal", from_node, to_idx, name_idx);
+    update_parent_in_stack(g_snapshot, (size_t)from);
+    auto to_idx = record_node_to_gc_stack(to);
+    _record_just_edge_to_gc_stack(to_idx, SidecarEdge{"internal", "local var"});
 }
 
 void _gc_heap_snapshot_record_task_to_frame_edge(jl_task_t *from, void *to) JL_NOTSAFEPOINT
 {
-    auto from_node_idx = record_node_to_gc_snapshot((jl_value_t*)from);
-    auto to_node_idx = _record_stack_frame_node(g_snapshot, to);
-    Node &from_node = g_snapshot->nodes[from_node_idx];
-
-    auto name_idx = g_snapshot->names.find_or_create_string_id("stack");
-    _record_gc_just_edge("internal", from_node, to_node_idx, name_idx);
+    update_parent_in_stack(g_snapshot, (size_t)from);
+    auto to_idx = _record_stack_frame_node(g_snapshot, to);
+    _record_just_edge_to_gc_stack(to_idx, SidecarEdge{"internal", "stack"});
 }
 
 void _gc_heap_snapshot_record_frame_to_frame_edge(jl_gcframe_t *from, jl_gcframe_t *to) JL_NOTSAFEPOINT
 {
-    auto from_node_idx = _record_stack_frame_node(g_snapshot, from);
-    auto to_node_idx = _record_stack_frame_node(g_snapshot, to);
-    Node &from_node = g_snapshot->nodes[from_node_idx];
-
-    auto name_idx = g_snapshot->names.find_or_create_string_id("next frame");
-    _record_gc_just_edge("internal", from_node, to_node_idx, name_idx);
+    update_parent_in_stack(g_snapshot, (size_t)from);
+    auto to_idx = _record_stack_frame_node(g_snapshot, to);
+    _record_just_edge_to_gc_stack(to_idx, SidecarEdge{"internal", "next frame"});
 }
 
 void _gc_heap_snapshot_record_array_edge(jl_value_t *from, jl_value_t *to, size_t index) JL_NOTSAFEPOINT
@@ -472,23 +564,23 @@ void _gc_heap_snapshot_record_object_edge(jl_value_t *from, jl_value_t *to, void
 
 void _gc_heap_snapshot_record_module_to_binding(jl_module_t* module, jl_binding_t* binding) JL_NOTSAFEPOINT
 {
-    auto from_node_idx = record_node_to_gc_snapshot((jl_value_t*)module);
-    auto to_node_idx = record_pointer_to_gc_snapshot(binding, sizeof(jl_binding_t), jl_symbol_name(binding->name));
-
-    jl_value_t *value = jl_atomic_load_relaxed(&binding->value);
-    auto value_idx = value ? record_node_to_gc_snapshot(value) : 0;
-    jl_value_t *ty = jl_atomic_load_relaxed(&binding->ty);
-    auto ty_idx = ty ? record_node_to_gc_snapshot(ty) : 0;
-    jl_value_t *globalref = jl_atomic_load_relaxed(&binding->globalref);
-    auto globalref_idx = globalref ? record_node_to_gc_snapshot(globalref) : 0;
-
-    auto &from_node = g_snapshot->nodes[from_node_idx];
-    auto &to_node = g_snapshot->nodes[to_node_idx];
-
-    _record_gc_just_edge("property", from_node, to_node_idx, g_snapshot->names.find_or_create_string_id("<native>"));
-    if (value_idx)     _record_gc_just_edge("internal", to_node, value_idx, g_snapshot->names.find_or_create_string_id("value"));
-    if (ty_idx)        _record_gc_just_edge("internal", to_node, ty_idx, g_snapshot->names.find_or_create_string_id("ty"));
-    if (globalref_idx) _record_gc_just_edge("internal", to_node, globalref_idx, g_snapshot->names.find_or_create_string_id("globalref"));
+//    auto from_node_idx = record_node_to_gc_snapshot((jl_value_t*)module);
+//    auto to_node_idx = record_pointer_to_gc_snapshot(binding, sizeof(jl_binding_t), jl_symbol_name(binding->name));
+//
+//    jl_value_t *value = jl_atomic_load_relaxed(&binding->value);
+//    auto value_idx = value ? record_node_to_gc_snapshot(value) : 0;
+//    jl_value_t *ty = jl_atomic_load_relaxed(&binding->ty);
+//    auto ty_idx = ty ? record_node_to_gc_snapshot(ty) : 0;
+//    jl_value_t *globalref = jl_atomic_load_relaxed(&binding->globalref);
+//    auto globalref_idx = globalref ? record_node_to_gc_snapshot(globalref) : 0;
+//
+//    auto &from_node = g_snapshot->nodes[from_node_idx];
+//    auto &to_node = g_snapshot->nodes[to_node_idx];
+//
+//    _record_gc_just_edge("property", from_node, to_node_idx, g_snapshot->names.find_or_create_string_id("<native>"));
+//    if (value_idx)     _record_gc_just_edge("internal", to_node, value_idx, g_snapshot->names.find_or_create_string_id("value"));
+//    if (ty_idx)        _record_gc_just_edge("internal", to_node, ty_idx, g_snapshot->names.find_or_create_string_id("ty"));
+//    if (globalref_idx) _record_gc_just_edge("internal", to_node, globalref_idx, g_snapshot->names.find_or_create_string_id("globalref"));
 }
 
 void _gc_heap_snapshot_record_internal_array_edge(jl_value_t *from, jl_value_t *to) JL_NOTSAFEPOINT
@@ -499,9 +591,9 @@ void _gc_heap_snapshot_record_internal_array_edge(jl_value_t *from, jl_value_t *
 
 void _gc_heap_snapshot_record_hidden_edge(jl_value_t *from, void* to, size_t bytes, uint16_t alloc_type) JL_NOTSAFEPOINT
 {
-    size_t name_or_idx = g_snapshot->names.find_or_create_string_id("<native>");
+    string name = "<native>";
 
-    auto from_node_idx = record_node_to_gc_snapshot(from);
+    update_parent_in_stack(g_snapshot, (size_t)from);
     const char *alloc_kind;
     switch (alloc_type)
     {
@@ -518,24 +610,27 @@ void _gc_heap_snapshot_record_hidden_edge(jl_value_t *from, void* to, size_t byt
         alloc_kind = "<undef>";
         break;
     }
-    auto to_node_idx = record_pointer_to_gc_snapshot(to, bytes, alloc_kind);
-    auto &from_node = g_snapshot->nodes[from_node_idx];
+    auto to_idx = record_pointer_to_gc_stack(to, bytes, alloc_kind);
 
-    _record_gc_just_edge("hidden", from_node, to_node_idx, name_or_idx);
+    _record_just_edge_to_gc_stack(to_idx, make_sidecar_edge("hidden", name));
 }
 
 static inline void _record_gc_edge(const char *edge_type, jl_value_t *a,
-                                  jl_value_t *b, size_t name_or_idx) JL_NOTSAFEPOINT
+                                  jl_value_t *b, StringRef name) JL_NOTSAFEPOINT
 {
-    auto from_node_idx = record_node_to_gc_snapshot(a);
-    auto to_node_idx = record_node_to_gc_snapshot(b);
-
-    auto &from_node = g_snapshot->nodes[from_node_idx];
-
-    _record_gc_just_edge(edge_type, from_node, to_node_idx, name_or_idx);
+    update_parent_in_stack(g_snapshot, (size_t)a);
+    auto to_idx = record_node_to_gc_stack(b);
+    _record_just_edge_to_gc_stack(to_idx, make_sidecar_edge(edge_type, name));
+}
+static inline void _record_gc_edge(const char *edge_type, jl_value_t *a,
+                                  jl_value_t *b, size_t index) JL_NOTSAFEPOINT
+{
+    update_parent_in_stack(g_snapshot, (size_t)a);
+    auto to_idx = record_node_to_gc_stack(b);
+    _record_just_edge_to_gc_stack(to_idx, make_sidecar_edge(edge_type, index));
 }
 
-void _publish_gc_just_edge(const char *edge_type, SidecarNode &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT
+void _publish_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT
 {
     from_node.edges.push_back(Edge{
         g_snapshot->edge_types.find_or_create_string_id(edge_type),
