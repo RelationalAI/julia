@@ -93,7 +93,7 @@ WITH_DTRACE := 0
 WITH_ITTAPI := 0
 
 # Enable Perfetto traces
-WITH_PERFETTO := 0
+WITH_PERFETTO := 1
 
 # Prevent picking up $ARCH from the environment variables
 ARCH:=
