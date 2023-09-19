@@ -2059,12 +2059,12 @@ STATIC_INLINE void gc_mark_objarray(jl_ptls_t ptls, jl_value_t *obj_parent, jl_v
             if (new_obj != NULL) {
                 verify_parent2("obj array", obj_parent, obj_begin, "elem(%d)",
                                gc_slot_to_arrayidx(obj_parent, obj_begin));
+                gc_heap_snapshot_record_array_edge(obj_parent, &new_obj);
                 jl_taggedvalue_t *o = jl_astaggedvalue(new_obj);
                 if (!gc_old(o->header))
                     nptr |= 1;
                 if (!gc_marked(o->header))
                     break;
-                gc_heap_snapshot_record_array_edge(obj_parent, &new_obj);
             }
         }
     }
@@ -2386,6 +2386,7 @@ STATIC_INLINE void gc_mark_module_binding(jl_ptls_t ptls, jl_module_t *mb_parent
         jl_value_t *globalref = jl_atomic_load_relaxed(&b->globalref);
         gc_try_claim_and_push(mq, globalref, &nptr);
     }
+    gc_heap_snapshot_record_object_edge(mb_parent, mb_parent->parent);
     gc_try_claim_and_push(mq, (jl_value_t *)mb_parent->parent, &nptr);
     size_t nusings = mb_parent->usings.len;
     if (nusings > 0) {
@@ -3016,27 +3017,36 @@ extern jl_value_t *cmpswap_names JL_GLOBALLY_ROOTED;
 static void gc_mark_roots(jl_gc_markqueue_t *mq)
 {
     // modules
-    gc_try_claim_and_push(mq, jl_main_module, NULL);
     gc_heap_snapshot_record_root((jl_value_t*)jl_main_module, "main_module");
+    gc_try_claim_and_push(mq, jl_main_module, NULL);
     // invisible builtin values
+    gc_heap_snapshot_record_root((jl_value_t*)jl_an_empty_vec_any, "empty vec any");
     gc_try_claim_and_push(mq, jl_an_empty_vec_any, NULL);
+    gc_heap_snapshot_record_root((jl_value_t*)jl_module_init_order, "jl_module_init_order");
     gc_try_claim_and_push(mq, jl_module_init_order, NULL);
     for (size_t i = 0; i < jl_current_modules.size; i += 2) {
         if (jl_current_modules.table[i + 1] != HT_NOTFOUND) {
-            gc_try_claim_and_push(mq, jl_current_modules.table[i], NULL);
             gc_heap_snapshot_record_root((jl_value_t*)jl_current_modules.table[i], "top level module");
+            gc_try_claim_and_push(mq, jl_current_modules.table[i], NULL);
         }
     }
+    gc_heap_snapshot_record_root((jl_value_t*)jl_anytuple_type_type, "jl_anytuple_type_type");
     gc_try_claim_and_push(mq, jl_anytuple_type_type, NULL);
     for (size_t i = 0; i < N_CALL_CACHE; i++) {
         jl_typemap_entry_t *v = jl_atomic_load_relaxed(&call_cache[i]);
+        gc_heap_snapshot_record_root((jl_value_t*)v, "top level call cache");
         gc_try_claim_and_push(mq, v, NULL);
     }
+    gc_heap_snapshot_record_root((jl_value_t*)jl_all_methods, "jl_all_methods");
     gc_try_claim_and_push(mq, jl_all_methods, NULL);
+    gc_heap_snapshot_record_root((jl_value_t*)_jl_debug_method_invalidation, "_jl_debug_method_invalidation");
     gc_try_claim_and_push(mq, _jl_debug_method_invalidation, NULL);
     // constants
+    gc_heap_snapshot_record_root((jl_value_t*)jl_emptytuple_type, "jl_emptytuple_type");
     gc_try_claim_and_push(mq, jl_emptytuple_type, NULL);
+    gc_heap_snapshot_record_root((jl_value_t*)cmpswap_names, "cmpswap_names");
     gc_try_claim_and_push(mq, cmpswap_names, NULL);
+    gc_heap_snapshot_record_root((jl_value_t*)jl_global_roots_table, "jl_global_roots_table");
     gc_try_claim_and_push(mq, jl_global_roots_table, NULL);
 }
 

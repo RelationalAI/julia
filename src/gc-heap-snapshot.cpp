@@ -187,6 +187,7 @@ struct HeapSnapshot {
     // sample a node (which could be rare), we can fully reconstruct the path back to the
     // root for every node that we sample.
     vector<SidecarNode> current_stack;
+    size_t current_parent;
 };
 
 // global heap snapshot, mutated by garbage collector
@@ -260,24 +261,36 @@ void _add_internal_root(HeapSnapshot *snapshot)
 
 void update_parent_in_stack(HeapSnapshot *snapshot, size_t parent_id) JL_NOTSAFEPOINT
 {
+    static int log = 10;
+    if (log > 0) {
+        log--;
+        std::cout << "Updating parent to " << parent_id << "\n";
+    } else {
+        exit(1);
+    }
+
     // If the new node isn't a child of the current back of the stack, the back of the stack
     // is a *leaf*, and we've finished this trace. Decide whether to sample the node, and
     // if so, publish it, and then pop the stack until we find a node that matches the
     // new node's parent.
-    if (g_snapshot->current_stack.back().id != parent_id) {
+    if (g_snapshot->current_parent != parent_id && g_snapshot->current_stack.back().id != parent_id) {
         static int first = 10;
         // TODO: Sampling
         if (first > 0 || rand() % 100000 == 0) {
 
             first--;
             // TODO: Publish the stack trace
-            std::cout << "Got " << parent_id << " but current tip is " << g_snapshot->current_stack.back().id << "\n";
 
             std::cout << "Publishing trace!\n";
+            std::cout << "Got " << parent_id << ". current parent: " << g_snapshot->current_parent << " current tip: " << g_snapshot->current_stack.back().id << "\n";
+
             for (auto &node : g_snapshot->current_stack) {
                 std::cout << node.id << ":  " << node.parent_to_me.name.str() << " -> " << node.name.str() << "\n";
             }
             std::cout << std::endl;
+        }
+        if (first == 0) {
+            exit(1);
         }
 
         // Now, clear out all the nodes on the stack until we find the parent
@@ -286,10 +299,12 @@ void update_parent_in_stack(HeapSnapshot *snapshot, size_t parent_id) JL_NOTSAFE
             g_snapshot->current_stack.pop_back();
         }
     }
+    g_snapshot->current_parent = parent_id;
 }
 
 size_t _push_new_gc_stack_node(const SidecarNode &node) JL_NOTSAFEPOINT
 {
+    std::cout << "Recording new node: " << (size_t)node.id << " name: " << node.name.str() << "\n";
     g_snapshot->current_stack.push_back(node);
     return g_snapshot->current_stack.size() - 1;
 }
@@ -434,8 +449,7 @@ static size_t record_pointer_to_gc_stack(void *a, size_t bytes, StringRef name) 
     };
 
     // Push the new node into the sidecar DFS stack.
-    g_snapshot->current_stack.push_back(new_node);
-    return g_snapshot->current_stack.size() - 1;
+    return _push_new_gc_stack_node(new_node);
 }
 
 static string _fieldpath_for_slot(void *obj, void *slot) JL_NOTSAFEPOINT
@@ -525,8 +539,7 @@ size_t _record_stack_frame_node(HeapSnapshot *snapshot, void *frame) JL_NOTSAFEP
     };
 
     // Push the new node into the sidecar DFS stack.
-    g_snapshot->current_stack.push_back(new_node);
-    return g_snapshot->current_stack.size() - 1;
+    return _push_new_gc_stack_node(new_node);
 }
 
 void _gc_heap_snapshot_record_frame_to_object_edge(void *from, jl_value_t *to) JL_NOTSAFEPOINT
@@ -568,26 +581,25 @@ void _gc_heap_snapshot_record_module_to_binding(jl_module_t* module, jl_binding_
     auto to_node_idx = record_pointer_to_gc_stack(binding, sizeof(jl_binding_t), jl_symbol_name(binding->name));
     _record_just_edge_to_gc_stack(to_node_idx, SidecarEdge{"property", "<native>"});
 
-    jl_value_t *value = jl_atomic_load_relaxed(&binding->value);
-    auto value_idx = value ? record_node_to_gc_stack(value) : 0;
+    // NOTE: The order of these must match the order in gc.c
+    // ... TODO: why don't we just register these from gc.c?
     jl_value_t *ty = jl_atomic_load_relaxed(&binding->ty);
-    auto ty_idx = ty ? record_node_to_gc_stack(ty) : 0;
-    jl_value_t *globalref = jl_atomic_load_relaxed(&binding->globalref);
-    auto globalref_idx = globalref ? record_node_to_gc_stack(globalref) : 0;
-
-    // TODO: Which one gets to stay on the stack? The other two won't be able to be
-    // referenced.
-    if (ty_idx) {
+    if (ty) {
         update_parent_in_stack(g_snapshot, (size_t)binding);
+        auto ty_idx = record_node_to_gc_stack(ty);
         _record_just_edge_to_gc_stack(ty_idx, SidecarEdge{"internal", "ty"});
     }
-    if (globalref_idx) {
+    jl_value_t *value = jl_atomic_load_relaxed(&binding->value);
+    if (value) {
         update_parent_in_stack(g_snapshot, (size_t)binding);
-        _record_just_edge_to_gc_stack(globalref_idx, SidecarEdge{"internal", "globalref"});
-    }
-    if (value_idx) {
-        update_parent_in_stack(g_snapshot, (size_t)binding);
+        auto value_idx = record_node_to_gc_stack(value);
         _record_just_edge_to_gc_stack(value_idx, SidecarEdge{"internal", "value"});
+    }
+    jl_value_t *globalref = jl_atomic_load_relaxed(&binding->globalref);
+    if (globalref) {
+        update_parent_in_stack(g_snapshot, (size_t)binding);
+        auto globalref_idx = record_node_to_gc_stack(globalref);
+        _record_just_edge_to_gc_stack(globalref_idx, SidecarEdge{"internal", "globalref"});
     }
 }
 
