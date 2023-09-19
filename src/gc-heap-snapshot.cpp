@@ -564,23 +564,31 @@ void _gc_heap_snapshot_record_object_edge(jl_value_t *from, jl_value_t *to, void
 
 void _gc_heap_snapshot_record_module_to_binding(jl_module_t* module, jl_binding_t* binding) JL_NOTSAFEPOINT
 {
-//    auto from_node_idx = record_node_to_gc_snapshot((jl_value_t*)module);
-//    auto to_node_idx = record_pointer_to_gc_snapshot(binding, sizeof(jl_binding_t), jl_symbol_name(binding->name));
-//
-//    jl_value_t *value = jl_atomic_load_relaxed(&binding->value);
-//    auto value_idx = value ? record_node_to_gc_snapshot(value) : 0;
-//    jl_value_t *ty = jl_atomic_load_relaxed(&binding->ty);
-//    auto ty_idx = ty ? record_node_to_gc_snapshot(ty) : 0;
-//    jl_value_t *globalref = jl_atomic_load_relaxed(&binding->globalref);
-//    auto globalref_idx = globalref ? record_node_to_gc_snapshot(globalref) : 0;
-//
-//    auto &from_node = g_snapshot->nodes[from_node_idx];
-//    auto &to_node = g_snapshot->nodes[to_node_idx];
-//
-//    _record_gc_just_edge("property", from_node, to_node_idx, g_snapshot->names.find_or_create_string_id("<native>"));
-//    if (value_idx)     _record_gc_just_edge("internal", to_node, value_idx, g_snapshot->names.find_or_create_string_id("value"));
-//    if (ty_idx)        _record_gc_just_edge("internal", to_node, ty_idx, g_snapshot->names.find_or_create_string_id("ty"));
-//    if (globalref_idx) _record_gc_just_edge("internal", to_node, globalref_idx, g_snapshot->names.find_or_create_string_id("globalref"));
+    update_parent_in_stack(g_snapshot, (size_t)module);
+    auto to_node_idx = record_pointer_to_gc_stack(binding, sizeof(jl_binding_t), jl_symbol_name(binding->name));
+    _record_just_edge_to_gc_stack(to_node_idx, SidecarEdge{"property", "<native>"});
+
+    jl_value_t *value = jl_atomic_load_relaxed(&binding->value);
+    auto value_idx = value ? record_node_to_gc_stack(value) : 0;
+    jl_value_t *ty = jl_atomic_load_relaxed(&binding->ty);
+    auto ty_idx = ty ? record_node_to_gc_stack(ty) : 0;
+    jl_value_t *globalref = jl_atomic_load_relaxed(&binding->globalref);
+    auto globalref_idx = globalref ? record_node_to_gc_stack(globalref) : 0;
+
+    // TODO: Which one gets to stay on the stack? The other two won't be able to be
+    // referenced.
+    if (ty_idx) {
+        update_parent_in_stack(g_snapshot, (size_t)binding);
+        _record_just_edge_to_gc_stack(ty_idx, SidecarEdge{"internal", "ty"});
+    }
+    if (globalref_idx) {
+        update_parent_in_stack(g_snapshot, (size_t)binding);
+        _record_just_edge_to_gc_stack(globalref_idx, SidecarEdge{"internal", "globalref"});
+    }
+    if (value_idx) {
+        update_parent_in_stack(g_snapshot, (size_t)binding);
+        _record_just_edge_to_gc_stack(value_idx, SidecarEdge{"internal", "value"});
+    }
 }
 
 void _gc_heap_snapshot_record_internal_array_edge(jl_value_t *from, jl_value_t *to) JL_NOTSAFEPOINT
