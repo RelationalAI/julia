@@ -725,7 +725,7 @@ JL_DLLEXPORT void jl_switch(void)
                          "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
              "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
              "\"args\":{\"task\":\"0x%lx\"}},\n",
-             tctoid, getpid(), tcttid, tts, tctoid,
+             tctoid, getpid(), tcttid, tts-1, tctoid,
              tctoid, getpid(), tcttid, tts, tctoid);
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
 #endif
@@ -1144,7 +1144,7 @@ CFI_NORETURN
                          "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
              "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
              "\"args\":{\"task\":\"0x%lx\"}},\n",
-             tctoid, getpid(), tcttid, tts, tctoid,
+             tctoid, getpid(), tcttid, tts-1, tctoid,
              tctoid, getpid(), tcttid, tts, tctoid);
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
 #endif
