@@ -32,7 +32,7 @@
     </tr>
 </table>
 
-## The Julia Language
+## The Julia Language!
 
 Julia is a high-level, high-performance dynamic language for technical
 computing.  The main homepage for Julia can be found at
