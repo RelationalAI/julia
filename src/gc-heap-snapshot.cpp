@@ -574,6 +574,9 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
     std::cout << new_nodes.size() << " nodes in downsampled snapshot\n";
     assert(new_nodes.size() == node_id_to_new_node_idx_map.size());
 
+    // Reset the number of edges while we touch every node.
+    int num_edges = 0;
+
     // Since we now reinsert all the nodes into a smaller array, we need to update
     // all the indices in the edges.
     for (auto &node : new_nodes) {
@@ -584,6 +587,7 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
         // complete picture of Containment.
         // The tradeoff is that the cost to record the snapshot is higher, and the snapshot
         // is larger.
+        assert(node.sampled_edges.size() == 0);
         for (auto &edge : node.edges) {
             size_t old_to_id = snapshot.nodes[edge.to_node].id;
             // If the edge points to one of the sampled nodes, keep it.
@@ -594,18 +598,21 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
             size_t new_to_node_idx = iter->second;
             edge.to_node = new_to_node_idx;
             node.sampled_edges.push_back(edge);
+            num_edges += 1;
         }
 
         // Keep only the sampled edges.
-        std::swap(node.edges, node.sampled_edges);
-        node.sampled_edges.clear();
+        node.edges = std::move(node.sampled_edges);
         // Keep the new node.
         snapshot.nodes.push_back(node);
     }
     // Now replace the snapshot's nodes with the values from node_id_to_node_map.
+    std::cout << snapshot.nodes.size() << " original nodes\n";
     snapshot.nodes = std::move(new_nodes);
+    snapshot.num_edges = num_edges;
 
     std::cout << snapshot.nodes.size() << " nodes in downsampled snapshot\n";
+    std::cout << num_edges << " edges after downsampling\n";
 
 }
 
@@ -669,6 +676,7 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
         }
     }
     std::cout << num_edges << " edges in snapshot\n";
+    std::cout << snapshot.num_edges << " edges expected in snapshot\n";
     ios_printf(stream, "],\n"); // end "edges"
 
     ios_printf(stream, "\"strings\":");
