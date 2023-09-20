@@ -572,10 +572,14 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
         //std::cout << depth << std::endl;
     }
     std::cout << new_nodes.size() << " nodes in downsampled snapshot\n";
-    assert(new_nodes.size() == node_id_to_new_node_idx_map.size());
+    if (new_nodes.size() != node_id_to_new_node_idx_map.size()) {
+        std::cout << "THIS IS A BUG: new_nodes.size " << new_nodes.size() << " doesn't match expected. " << node_id_to_new_node_idx_map.size() << std::endl;
+        exit(1);
+    }
 
     // Reset the number of edges while we touch every node.
     int num_edges = 0;
+    int num_edges_before = 0;
 
     // Since we now reinsert all the nodes into a smaller array, we need to update
     // all the indices in the edges.
@@ -587,10 +591,10 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
         // complete picture of Containment.
         // The tradeoff is that the cost to record the snapshot is higher, and the snapshot
         // is larger.
-        assert(node.sampled_edges.size() == 0);
         for (auto &edge : node.edges) {
             size_t old_to_id = snapshot.nodes[edge.to_node].id;
             // If the edge points to one of the sampled nodes, keep it.
+            num_edges_before += 1;
             auto iter = node_id_to_new_node_idx_map.find(old_to_id);
             if (iter == node_id_to_new_node_idx_map.end()) {
                 continue;
@@ -598,13 +602,11 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
             size_t new_to_node_idx = iter->second;
             edge.to_node = new_to_node_idx;
             node.sampled_edges.push_back(edge);
-            num_edges += 1;
         }
+        num_edges += node.sampled_edges.size();
 
         // Keep only the sampled edges.
         node.edges = std::move(node.sampled_edges);
-        // Keep the new node.
-        snapshot.nodes.push_back(node);
     }
     // Now replace the snapshot's nodes with the values from node_id_to_node_map.
     std::cout << snapshot.nodes.size() << " original nodes\n";
@@ -612,6 +614,7 @@ void downsample_heap_snapshot(HeapSnapshot &snapshot, double sample_rate) {
     snapshot.num_edges = num_edges;
 
     std::cout << snapshot.nodes.size() << " nodes in downsampled snapshot\n";
+    std::cout << num_edges_before << " edges originally\n";
     std::cout << num_edges << " edges after downsampling\n";
 
 }
