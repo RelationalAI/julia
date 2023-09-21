@@ -1,6 +1,4 @@
 ## p7zip ##
-include $(SRCDIR)/p7zip.version
-
 ifneq ($(USE_BINARYBUILDER_P7ZIP),1)
 
 $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz: | $(SRCCACHE)
@@ -36,14 +34,12 @@ clean-p7zip:
 distclean-p7zip:
 	rm -rf $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz $(SRCCACHE)/p7zip-$(P7ZIP_VER) $(BUILDDIR)/p7zip-$(P7ZIP_VER)
 
-
 get-p7zip: $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz
 extract-p7zip: $(SRCCACHE)/p7zip-$(P7ZIP_VER)/source-extracted
 configure-p7zip: $(BUILDDIR)/p7zip-$(P7ZIP_VER)/build-configured
 compile-p7zip: $(BUILDDIR)/p7zip-$(P7ZIP_VER)/build-compiled
 fastcheck-p7zip: check-p7zip
 check-p7zip: compile-p7zip
-
 
 else # USE_BINARYBUILDER_P7ZIP
 
