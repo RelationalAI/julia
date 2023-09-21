@@ -1152,8 +1152,8 @@ static void sweep_weak_refs(void)
 static inline jl_value_t *jl_gc_big_alloc_inner(jl_ptls_t ptls, size_t sz)
 {
     // 1TB allocated in SeparateCompilation bench through jemalloc
-    // get 1000 samples => 1 byte per 1G
-    double p = sz/1E+9;
+    // get 10000 samples => 10 byte per 1G
+    double p = sz/1E+8;
     if (rand() < p*RAND_MAX)
     {
         JL_TRY {
