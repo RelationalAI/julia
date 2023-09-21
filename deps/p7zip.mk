@@ -1,9 +1,10 @@
 ## p7zip ##
+include $(SRCDIR)/p7zip.version
 
 ifneq ($(USE_BINARYBUILDER_P7ZIP),1)
 
 $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz: | $(SRCCACHE)
-	$(JLDOWNLOAD) $@ https://github.com/jinfeihan57/p7zip/archive/refs/tags/v$(P7ZIP_VER).tar.gz
+	$(JLDOWNLOAD) $@ https://github.com/p7zip-project/p7zip/archive/refs/tags/v$(P7ZIP_VER).tar.gz
 
 $(BUILDDIR)/p7zip-$(P7ZIP_VER)/source-extracted: $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz
 	$(JLCHECKSUM) $<
@@ -28,12 +29,12 @@ $(eval $(call staged-install, \
 	P7ZIP_INSTALL,,,))
 
 clean-p7zip:
-	-rm $(BUILDDIR)/p7zip-$(P7ZIP_VER)/build-configured $(BUILDDIR)/p7zip-$(P7ZIP_VER)/build-compiled
-	-rm $(build_bindir)/7za
+	-rm -f $(BUILDDIR)/p7zip-$(P7ZIP_VER)/build-configured $(BUILDDIR)/p7zip-$(P7ZIP_VER)/build-compiled
+	-rm -f $(build_bindir)/7za
 	-$(MAKE) -C $(BUILDDIR)/p7zip-$(P7ZIP_VER) clean
 
 distclean-p7zip:
-	-rm -rf $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz $(SRCCACHE)/p7zip-$(P7ZIP_VER) $(BUILDDIR)/p7zip-$(P7ZIP_VER)
+	rm -rf $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz $(SRCCACHE)/p7zip-$(P7ZIP_VER) $(BUILDDIR)/p7zip-$(P7ZIP_VER)
 
 
 get-p7zip: $(SRCCACHE)/p7zip-$(P7ZIP_VER).tar.gz
