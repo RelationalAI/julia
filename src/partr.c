@@ -108,17 +108,7 @@ void jl_init_threadinginfra(void)
 
 void JL_NORETURN jl_finish_task(jl_task_t *t);
 
-static inline int may_mark(void) JL_NOTSAFEPOINT
-{
-    return (jl_atomic_load(&gc_n_threads_marking) > 0);
-}
-
-static inline int may_sweep(jl_ptls_t ptls) JL_NOTSAFEPOINT
-{
-    return (jl_atomic_load(&ptls->gc_sweeps_requested) > 0);
-}
-
-// gc thread function
+// parallel gc thread function
 void jl_gc_threadfun(void *arg)
 {
     jl_threadarg_t *targ = (jl_threadarg_t*)arg;
@@ -133,20 +123,7 @@ void jl_gc_threadfun(void *arg)
     // free the thread argument here
     free(targ);
 
-    while (1) {
-        uv_mutex_lock(&gc_threads_lock);
-        while (!may_mark() && !may_sweep(ptls)) {
-            uv_cond_wait(&gc_threads_cond, &gc_threads_lock);
-        }
-        uv_mutex_unlock(&gc_threads_lock);
-        if (may_mark()) {
-            gc_mark_loop_parallel(ptls, 0);
-        }
-        if (may_sweep(ptls)) { // not an else!
-            gc_sweep_pool_parallel();
-            jl_atomic_fetch_add(&ptls->gc_sweeps_requested, -1);
-        }
-    }
+    gc_worker_loop(ptls);
 }
 
 // thread function: used by all mutator threads except the main thread
