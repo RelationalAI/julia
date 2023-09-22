@@ -813,7 +813,7 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
     char tfn[64];
     sprintf(tfn, "perfetto-trace-%0d.json", getpid());
     tracef = fopen(tfn, "w");
-    fprintf(stdout, "Writing Perfetto trace to %s\n", tfn);
+    //fprintf(stdout, "Writing Perfetto trace to %s\n", tfn);
     fprintf(tracef, "{\"traceEvents\":[\n");
 #endif
     _finish_julia_init(rel, ptls, ct);

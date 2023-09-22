@@ -1603,7 +1603,7 @@ jl_task_t *jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi)
     ct->inference_start_time = 0;
     ptls->root_task = ct;
 #ifdef USE_PERFETTO
-    fprintf(stdout, "Started root task 0x%lx on thread %d\n", jl_object_id((jl_value_t *)ct), ptls->tid);
+    //fprintf(stdout, "Started root task 0x%lx on thread %d\n", jl_object_id((jl_value_t *)ct), ptls->tid);
 #endif
     jl_atomic_store_relaxed(&ptls->current_task, ct);
     JL_GC_PROMISE_ROOTED(ct);
