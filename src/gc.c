@@ -848,7 +848,7 @@ int prev_sweep_full = 1;
 #define inc_sat(v,s) v = (v) >= s ? s : (v)+1
 
 // Full collection heuristics
-static int64_t pool_live_bytes = 0;
+static _Atomic(int64_t) pool_live_bytes = 0;
 static int64_t live_bytes = 0;
 static int64_t promoted_bytes = 0;
 static int64_t last_live_bytes = 0; // live_bytes at last collection
@@ -1436,6 +1436,9 @@ STATIC_INLINE jl_value_t *jl_gc_pool_alloc_inner(jl_ptls_t ptls, int pool_offset
         jl_atomic_load_relaxed(&ptls->gc_num.allocd) + osize);
     jl_atomic_store_relaxed(&ptls->gc_num.poolalloc,
         jl_atomic_load_relaxed(&ptls->gc_num.poolalloc) + 1);
+    // XXX: for observability purposes only. This may become a hotspot if
+    // multiple threads are pool allocating at the same time.
+    jl_atomic_fetch_add(&pool_live_bytes, osize);
     // first try to use the freelist
     jl_taggedvalue_t *v = p->freelist;
     if (v != NULL) {
@@ -1641,7 +1644,7 @@ done:
     }
     gc_time_count_page(freedall, pg_skpd);
     gc_num.freed += (nfree - old_nfree) * osize;
-    pool_live_bytes += GC_PAGE_SZ - GC_PAGE_OFFSET - nfree * osize;
+    jl_atomic_fetch_add(&pool_live_bytes, GC_PAGE_SZ - GC_PAGE_OFFSET - nfree * osize);
     return pfl;
 }
 
@@ -3169,7 +3172,7 @@ JL_DLLEXPORT int64_t jl_gc_sync_total_bytes(int64_t offset) JL_NOTSAFEPOINT
 
 JL_DLLEXPORT int64_t jl_gc_pool_live_bytes(void)
 {
-    return pool_live_bytes;
+    return jl_atomic_load(&pool_live_bytes);
 }
 
 JL_DLLEXPORT int64_t jl_gc_live_bytes(void)
@@ -3356,7 +3359,7 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     }
     scanned_bytes = 0;
     // 6. start sweeping
-    pool_live_bytes = 0;
+    jl_atomic_store(&pool_live_bytes, 0);
     uint64_t start_sweep_time = jl_hrtime();
     JL_PROBE_GC_SWEEP_BEGIN(sweep_full);
     sweep_weak_refs();
