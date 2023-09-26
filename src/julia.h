@@ -904,6 +904,8 @@ extern void JL_GC_POP() JL_NOTSAFEPOINT;
 
 JL_DLLEXPORT int jl_gc_enable(int on);
 JL_DLLEXPORT int jl_gc_is_enabled(void);
+JL_DLLEXPORT int jl_gc_set_print_backtraces_flag(void);
+JL_DLLEXPORT void jl_print_task_backtraces(int show_done);
 
 typedef enum {
     JL_GC_AUTO = 0,         // use heuristics to determine the collection type

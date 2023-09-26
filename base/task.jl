@@ -992,3 +992,8 @@ if Sys.iswindows()
 else
     pause() = ccall(:pause, Cvoid, ())
 end
+
+function print_task_backtraces()
+    ccall(:jl_gc_set_print_backtraces_flag, Cint, ())
+    GC.gc(false)
+end

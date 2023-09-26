@@ -3201,6 +3201,16 @@ JL_DLLEXPORT int jl_gc_is_enabled(void)
     return !ptls->disable_gc;
 }
 
+// When set to 1, the next gc will print all task backtraces and reset
+// to zero.
+_Atomic(uint32_t) jl_gc_print_backtraces = 0;
+
+JL_DLLEXPORT int jl_gc_set_print_backtraces_flag(void)
+{
+    jl_atomic_fetch_add(&jl_gc_print_backtraces, 1);
+    return 0;
+}
+
 JL_DLLEXPORT void jl_gc_get_total_bytes(int64_t *bytes) JL_NOTSAFEPOINT
 {
     jl_gc_num_t num = gc_num;
@@ -3605,6 +3615,11 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     gc_all_tls_states = jl_atomic_load_relaxed(&jl_all_tls_states);
     jl_gc_wait_for_the_world(gc_all_tls_states, gc_n_threads);
     JL_PROBE_GC_STOP_THE_WORLD();
+
+    if (jl_atomic_load_acquire(&jl_gc_print_backtraces)) {
+        jl_atomic_store_relaxed(&jl_gc_print_backtraces, 0);
+        jl_print_task_backtraces(0);
+    }
 
     uint64_t t1 = jl_hrtime();
     uint64_t duration = t1 - t0;
