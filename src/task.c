@@ -657,12 +657,8 @@ JL_DLLEXPORT void jl_switch(void)
     uintptr_t tctoid = jl_object_id((jl_value_t *)ct);
     snprintf(tbuf, 1024, "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
              "\"ph\":\"E\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
-             "\"args\":{\"task\":\"0x%lx\"}},\n"
-                         "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
-             "\"ph\":\"s\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
              "\"args\":{\"task\":\"0x%lx\"}},\n",
-             tctoid, getpid(), tcttid, tts, tctoid,
-             tctoid, getpid(), tcttid, tts - 1, tctoid);
+             tctoid, getpid(), tcttid, tts, tctoid);
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
 #endif
 
@@ -719,13 +715,9 @@ JL_DLLEXPORT void jl_switch(void)
     tcttid = jl_get_task_tid(ct);
     tts = jl_hrtime()/1000;
     tctoid = jl_object_id((jl_value_t *)ct);
-    snprintf(tbuf, 1024, "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
-             "\"ph\":\"f\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
-             "\"args\":{\"queue_duration\":2,\"task\":\"0x%lx\"}},\n"
-                         "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
+    snprintf(tbuf, 1024, "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
              "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
              "\"args\":{\"task\":\"0x%lx\"}},\n",
-             tctoid, getpid(), tcttid, tts-1, tctoid,
              tctoid, getpid(), tcttid, tts, tctoid);
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
 #endif
@@ -943,12 +935,8 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
               ttoid = jl_object_id((jl_value_t *)t);
     snprintf(tbuf, 1024, "{\"name\":\"TaskNew\",\"cat\":\"task\",\"ph\":\"i\","
              "\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
-             "\"args\":{\"task\":\"0x%lx\",\"parent\":\"0x%lx\"}},\n"
-                         "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
-             "\"ph\":\"s\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
-             "\"args\":{\"task\":\"0x%lx\"}},\n",
-             getpid(), tcttid, tts, ttoid, tctoid,
-             ttoid, getpid(), tcttid, tts, ttoid);
+             "\"args\":{\"task\":\"0x%lx\",\"parent\":\"0x%lx\"}},\n",
+             getpid(), tcttid, tts, ttoid, tctoid);
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
 #endif
     t->copy_stack = 0;
@@ -1138,13 +1126,9 @@ CFI_NORETURN
     int tcttid = jl_get_task_tid(ct);
     uint64_t tts = jl_hrtime()/1000;
     uintptr_t tctoid = jl_object_id((jl_value_t *)ct);
-    snprintf(tbuf, 1024, "{\"name\":\"TaskEnqueue\",\"cat\":\"task\",\"id\":\"0x%lx\","
-             "\"ph\":\"f\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
-             "\"args\":{\"queue_duration\":2,\"task\":\"0x%lx\"}},\n"
-                         "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
+    snprintf(tbuf, 1024, "{\"name\":\"TaskRun\",\"cat\":\"task\",\"id\":\"0x%lx\","
              "\"ph\":\"B\",\"pid\":%-d,\"tid\":%-d,\"ts\":%llu,"
              "\"args\":{\"task\":\"0x%lx\"}},\n",
-             tctoid, getpid(), tcttid, tts-1, tctoid,
              tctoid, getpid(), tcttid, tts, tctoid);
     fwrite(tbuf, strlen(tbuf), sizeof(char), tracef);
 #endif
