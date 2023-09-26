@@ -172,6 +172,8 @@ exit:
 #endif
     errno = last_errno;
     jl_atomic_fetch_add(&current_pg_count, 1);
+    // zero out the page to make it count towards RSS completely
+    memset(meta->data, 0, GC_PAGE_SZ);
     return meta;
 }
 
