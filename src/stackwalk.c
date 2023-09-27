@@ -1186,12 +1186,13 @@ JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
         jl_safe_printf("==== Thread %d created %zu live tasks\n",
                 ptls2->tid + 1, n + 1);
         jl_safe_printf("     ---- Root task (%p)\n", ptls2->root_task);
-        jl_safe_printf("          (sticky: %d, started: %d, state: %d, tid: %d)\n",
-                ptls2->root_task->sticky, ptls2->root_task->started,
-                jl_atomic_load_relaxed(&ptls2->root_task->_state),
-                jl_atomic_load_relaxed(&ptls2->root_task->tid) + 1);
-        jlbacktracet(ptls2->root_task);
-
+        if (ptls2->root_task != NULL) {
+            jl_safe_printf("          (sticky: %d, started: %d, state: %d, tid: %d)\n",
+                    ptls2->root_task->sticky, ptls2->root_task->started,
+                    jl_atomic_load_relaxed(&ptls2->root_task->_state),
+                    jl_atomic_load_relaxed(&ptls2->root_task->tid) + 1);
+            jlbacktracet(ptls2->root_task);
+        }
         void **lst = live_tasks->items;
         for (size_t j = 0; j < live_tasks->len; j++) {
             jl_task_t *t = (jl_task_t *)lst[j];
