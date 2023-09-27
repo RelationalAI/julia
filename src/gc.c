@@ -3616,11 +3616,6 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     jl_gc_wait_for_the_world(gc_all_tls_states, gc_n_threads);
     JL_PROBE_GC_STOP_THE_WORLD();
 
-    if (jl_atomic_load_acquire(&jl_gc_print_backtraces)) {
-        jl_atomic_store_relaxed(&jl_gc_print_backtraces, 0);
-        jl_print_task_backtraces(0);
-    }
-
     uint64_t t1 = jl_hrtime();
     uint64_t duration = t1 - t0;
     if (duration > gc_num.max_time_to_safepoint)
@@ -3630,6 +3625,11 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
 
     gc_invoke_callbacks(jl_gc_cb_pre_gc_t,
         gc_cblist_pre_gc, (collection));
+
+    if (jl_atomic_load_acquire(&jl_gc_print_backtraces)) {
+        jl_atomic_store_relaxed(&jl_gc_print_backtraces, 0);
+        jl_print_task_backtraces_from_gc();
+    }
 
     if (!jl_atomic_load_acquire(&jl_gc_disable_counter)) {
         JL_LOCK_NOGC(&finalizers_lock);

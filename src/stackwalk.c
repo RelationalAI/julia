@@ -1136,6 +1136,38 @@ JL_DLLEXPORT void jl_print_backtrace(void) JL_NOTSAFEPOINT
     jlbacktrace();
 }
 
+uv_mutex_t allbt_lock;
+uv_cond_t allbt_cond;
+int allbt_done = 0;
+int allbt_initialized = 0;
+
+void allbt_threadfun(void* arg)
+{
+    uv_mutex_lock(&allbt_lock);
+    jl_print_task_backtraces(0);
+    allbt_done = 1;
+    uv_cond_broadcast(&allbt_cond);
+    uv_mutex_unlock(&allbt_lock);
+}
+
+JL_DLLEXPORT void jl_print_task_backtraces_from_gc(void) JL_NOTSAFEPOINT
+{
+    if (!allbt_initialized)
+    {
+        allbt_initialized = 1;
+        uv_mutex_init(&allbt_lock);
+        uv_cond_init(&allbt_cond);
+    }
+
+    uv_thread_t uvtid;
+    uv_mutex_lock(&allbt_lock);
+    allbt_done = 0;
+    uv_thread_create(&uvtid, allbt_threadfun, 0);
+    while (!allbt_done)
+        uv_cond_wait(&allbt_cond, &allbt_lock);
+    uv_mutex_unlock(&allbt_lock);
+}
+
 // Print backtraces for all live tasks, for all threads.
 // WARNING: this is dangerous and can crash if used outside of gdb, if
 // all of Julia's threads are not stopped!
