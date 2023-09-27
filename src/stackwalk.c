@@ -1177,6 +1177,9 @@ JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
     jl_ptls_t *allstates = jl_atomic_load_relaxed(&jl_all_tls_states);
     for (size_t i = 0; i < nthreads; i++) {
         jl_ptls_t ptls2 = allstates[i];
+        if (ptls2 == NULL) {
+            continue;
+        }
         arraylist_t *live_tasks = &ptls2->heap.live_tasks;
         size_t n = live_tasks->len;
         jl_safe_printf("==== Thread %d created %zu live tasks\n",
@@ -1191,18 +1194,22 @@ JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
         void **lst = live_tasks->items;
         for (size_t j = 0; j < live_tasks->len; j++) {
             jl_task_t *t = (jl_task_t *)lst[j];
-            int t_state = jl_atomic_load_relaxed(&t->_state);
+            int t_state = JL_TASK_STATE_DONE;
+            if (t != NULL)
+                t_state = jl_atomic_load_relaxed(&t->_state);
             if (!show_done && t_state == JL_TASK_STATE_DONE) {
                 continue;
             }
             jl_safe_printf("     ---- Task %zu (%p)\n", j + 1, t);
-            jl_safe_printf("          (sticky: %d, started: %d, state: %d, tid: %d)\n",
-                    t->sticky, t->started, t_state,
-                    jl_atomic_load_relaxed(&t->tid) + 1);
-            if (t->stkbuf != NULL)
-                jlbacktracet(t);
-            else
-                jl_safe_printf("      no stack\n");
+            if (t != NULL) {
+                jl_safe_printf("          (sticky: %d, started: %d, state: %d, tid: %d)\n",
+                        t->sticky, t->started, t_state,
+                        jl_atomic_load_relaxed(&t->tid) + 1);
+                if (t->stkbuf != NULL)
+                    jlbacktracet(t);
+                else
+                    jl_safe_printf("      no stack\n");
+            }
             jl_safe_printf("     ---- End task %zu\n", j + 1);
         }
         jl_safe_printf("==== End thread %d\n", ptls2->tid + 1);
