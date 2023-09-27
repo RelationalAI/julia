@@ -18,7 +18,7 @@ jobs:
       - name: Checkout RAI/julia
         uses: actions/checkout@v3
         with:
-          ref: RelationalAI/julia
+          ref: ${{ matrix.branch }}
       - name: Update ${{ matrix.branch }}
         run: |
           git config --global user.email "julia-engineering@relational.ai"
