@@ -14,6 +14,7 @@
 extern "C" {
 #endif
 
+extern uint64_t last_uv_run, max_uv_run_interval;//, last_report;
 
 // thread sleep state
 
@@ -428,8 +429,17 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
                     uv_loop_t *loop = jl_global_event_loop();
                     loop->stop_flag = 0;
                     JULIA_DEBUG_SLEEPWAKE( ptls->uv_run_enter = cycleclock() );
+                    uint64_t this_uv_run = jl_hrtime();
+                    uint64_t uv_run_interval = this_uv_run - last_uv_run;
+                    if (uv_run_interval > max_uv_run_interval) {
+                        max_uv_run_interval = uv_run_interval;
+                    //if (this_uv_run - last_report > 5000000000L) {
+                        jl_safe_printf("max_uv_run_interval = %ld\n", max_uv_run_interval);
+                    //    last_report = this_uv_run;
+                    }
                     active = uv_run(loop, UV_RUN_ONCE);
                     JULIA_DEBUG_SLEEPWAKE( ptls->uv_run_leave = cycleclock() );
+                    last_uv_run = jl_hrtime();
                     jl_gc_safepoint();
                 }
                 JL_UV_UNLOCK();

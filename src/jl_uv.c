@@ -29,6 +29,8 @@
 extern "C" {
 #endif
 
+uint64_t last_uv_run = UINT64_MAX, max_uv_run_interval = 0;//, last_report = 0;
+
 static uv_async_t signal_async;
 
 static void jl_signal_async_cb(uv_async_t *hdl)
@@ -211,10 +213,19 @@ JL_DLLEXPORT int jl_process_events(void)
     jl_gc_safepoint_(ct->ptls);
     if (loop && (jl_atomic_load_relaxed(&_threadedregion) || jl_atomic_load_relaxed(&ct->tid) == 0)) {
         if (jl_atomic_load_relaxed(&jl_uv_n_waiters) == 0 && jl_mutex_trylock(&jl_uv_mutex)) {
+            uint64_t this_uv_run = jl_hrtime();
+            uint64_t uv_run_interval = this_uv_run - last_uv_run;
+            if (uv_run_interval > max_uv_run_interval) {
+                max_uv_run_interval = uv_run_interval;
+            //if (this_uv_run - last_report > 5000000000L) {
+                jl_safe_printf("max_uv_run_interval = %ld\n", max_uv_run_interval);
+            //    last_report = this_uv_run;
+            }
             JL_PROBE_RT_START_PROCESS_EVENTS(ct);
             loop->stop_flag = 0;
             int r = uv_run(loop, UV_RUN_NOWAIT);
             JL_PROBE_RT_FINISH_PROCESS_EVENTS(ct);
+            last_uv_run = jl_hrtime();
             JL_UV_UNLOCK();
             return r;
         }
