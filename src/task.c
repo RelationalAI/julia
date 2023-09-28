@@ -41,6 +41,13 @@
 extern "C" {
 #endif
 
+#define JULIA_BACKTRACE_LONG_TASKS
+#ifdef JULIA_BACKTRACE_LONG_TASKS
+static uint64_t backtrace_long_tasks_threshold = 10000000000L; // ~10 secs
+static uint64_t **last_task_run_start;
+JL_DLLEXPORT extern void jlbacktracet(jl_task_t *) JL_NOTSAFEPOINT;
+#endif
+
 #if defined(_COMPILER_ASAN_ENABLED_)
 static inline void sanitizer_start_switch_fiber(jl_ptls_t ptls, jl_task_t *from, jl_task_t *to) {
     if (to->copy_stack)
@@ -294,6 +301,21 @@ void JL_NORETURN jl_finish_task(jl_task_t *t)
 {
     jl_task_t *ct = jl_current_task;
     JL_PROBE_RT_FINISH_TASK(ct);
+#ifdef JULIA_BACKTRACE_LONG_TASKS
+    jl_ptls_t ptls = ct->ptls;
+    // track interactive threads only
+    if (ptls->threadpoolid == 0) {
+        uint64_t pause = jl_hrtime(), interval = pause - *last_task_run_start[ptls->tid];
+        if (interval > backtrace_long_tasks_threshold) {
+            jl_safe_printf("==== thread (%d) task OID (%lx) ran for %lds\n",
+                           ptls->tid + 1, jl_object_id((jl_value_t *)ct),
+                           interval / 1000000000L);
+            jlbacktracet(ct);
+            jl_safe_printf("==== end thread (%d)\n", ptls->tid);
+            *last_task_run_start[ptls->tid] = pause;
+        }
+    }
+#endif
     JL_SIGATOMIC_BEGIN();
     if (jl_atomic_load_relaxed(&t->_isexception))
         jl_atomic_store_release(&t->_state, JL_TASK_STATE_FAILED);
@@ -638,6 +660,19 @@ JL_DLLEXPORT void jl_switch(void)
         jl_error("cannot switch to task running on another thread");
 
     JL_PROBE_RT_PAUSE_TASK(ct);
+#ifdef JULIA_BACKTRACE_LONG_TASKS
+    // track interactive threads only
+    if (ptls->threadpoolid == 0) {
+        uint64_t pause = jl_hrtime(), interval = pause - *last_task_run_start[ptls->tid];
+        if (interval > backtrace_long_tasks_threshold) {
+            jl_safe_printf("==== thread (%d) task OID (%lx) ran for %lds\n",
+                           ptls->tid + 1, jl_object_id((jl_value_t *)ct),
+                           interval / 1000000000L);
+            jlbacktracet(ct);
+            jl_safe_printf("==== end thread (%d)\n", ptls->tid);
+        }
+    }
+#endif
 
     // Store old values on the stack and reset
     sig_atomic_t defer_signal = ptls->defer_signal;
@@ -688,6 +723,11 @@ JL_DLLEXPORT void jl_switch(void)
         jl_sigint_safepoint(ptls);
 
     JL_PROBE_RT_RUN_TASK(ct);
+#ifdef JULIA_BACKTRACE_LONG_TASKS
+    if (ptls->threadpoolid == 0) {
+        *last_task_run_start[ptls->tid] = jl_hrtime();
+    }
+#endif
 }
 
 JL_DLLEXPORT void jl_switchto(jl_task_t **pt)
@@ -1032,6 +1072,12 @@ void jl_init_tasks(void) JL_GC_DISABLED
         exit(1);
     }
 #endif
+#ifdef JULIA_BACKTRACE_LONG_TASKS
+    char *cp = getenv("JULIA_BACKTRACE_LONG_TASKS_THRESHOLD");
+    if (cp) backtrace_long_tasks_threshold = (uint64_t)strtol(cp, NULL, 10);
+    int nthreads = jl_atomic_load_acquire(&jl_n_threads);
+    last_task_run_start = (uint64_t **)calloc(nthreads, sizeof(uint64_t *));
+#endif
 }
 
 #if defined(_COMPILER_ASAN_ENABLED_)
@@ -1076,6 +1122,11 @@ CFI_NORETURN
 
     ct->started = 1;
     JL_PROBE_RT_START_TASK(ct);
+#ifdef JULIA_BACKTRACE_LONG_TASKS
+    if (ptls->threadpoolid == 0) {
+        *last_task_run_start[ptls->tid] = jl_hrtime();
+    }
+#endif
     if (jl_atomic_load_relaxed(&ct->_isexception)) {
         record_backtrace(ptls, 0);
         jl_push_excstack(&ct->excstack, ct->result,
@@ -1474,6 +1525,12 @@ static char *jl_alloc_fiber(_jl_ucontext_t *t, size_t *ssize, jl_task_t *owner) 
 // Initialize a root task using the given stack.
 jl_task_t *jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi)
 {
+#ifdef JULIA_BACKTRACE_LONG_TASKS
+    if (ptls->threadpoolid == 0) {
+        last_task_run_start[ptls->tid] = (uint64_t *)calloc(1, sizeof(uint64_t));
+        *last_task_run_start[ptls->tid] = jl_hrtime();
+    }
+#endif
     assert(ptls->root_task == NULL);
     // We need `gcstack` in `Task` to allocate Julia objects; *including* the `Task` type.
     // However, to allocate a `Task` via `jl_gc_alloc` as done in `jl_init_root_task`,
