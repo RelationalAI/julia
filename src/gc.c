@@ -1155,7 +1155,7 @@ STATIC_INLINE jl_value_t *jl_gc_big_alloc_inner(jl_ptls_t ptls, size_t sz)
     jl_atomic_store_relaxed(&ptls->gc_num.bigalloc,
         jl_atomic_load_relaxed(&ptls->gc_num.bigalloc) + 1);
 #ifdef MEMDEBUG
-    memset(v, 0xee, allocsz);
+    // memset(v, 0xee, allocsz);
 #endif
     v->sz = allocsz;
     v->age = 0;
@@ -1216,7 +1216,7 @@ static bigval_t **sweep_big_list(int sweep_full, bigval_t **pv) JL_NOTSAFEPOINT
                 nxt->prev = pv;
             gc_num.freed += v->sz&~3;
 #ifdef MEMDEBUG
-            memset(v, 0xbb, v->sz&~3);
+            // memset(v, 0xbb, v->sz&~3);
 #endif
             gc_invoke_callbacks(jl_gc_cb_notify_external_free_t,
                 gc_cblist_notify_external_free, (v));
