@@ -736,7 +736,7 @@ size_t overallocation(size_t maxsize)
 {
     if (maxsize < 8)
         return 8;
-    // compute maxsize = maxsize + 4*maxsize^(7/8) + maxsize/8
+    // compute maxsize = maxsize + 2*maxsize^(7/8) + maxsize/8
     // for small n, we grow faster than O(n)
     // for large n, we grow at O(n/8)
     // and as we reach O(memory) for memory>>1MB,
@@ -747,7 +747,7 @@ size_t overallocation(size_t maxsize)
 #else
         __builtin_clz(maxsize);
 #endif
-    maxsize += ((size_t)1 << (exp2 * 7 / 8)) * 4 + maxsize / 8;
+    maxsize += ((size_t)1 << (exp2 * 7 / 8)) * 2 + maxsize / 8;
     return maxsize;
 }
 
