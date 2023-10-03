@@ -330,7 +330,7 @@ function ht_keyindex2_shorthash!(h::Dict{K,V}, key) where V where K
         iter += 1
     end
 
-    rehash!(h, h.count > 64000 ? sz*2 : sz*4)
+    rehash!(h, h.count > 64000 ? sz*2 : sz*2)
 
     return ht_keyindex2_shorthash!(h, key)
 end
@@ -352,7 +352,7 @@ ht_keyindex2!(h::Dict, key) = ht_keyindex2_shorthash!(h, key)[1]
     # Rehash now if necessary
     if h.ndel >= ((3*sz)>>2) || h.count*3 > sz*2
         # > 3/4 deleted or > 2/3 full
-        rehash!(h, h.count > 64000 ? h.count*2 : h.count*4)
+        rehash!(h, h.count > 64000 ? h.count*2 : h.count*2)
     end
     nothing
 end
