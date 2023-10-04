@@ -1345,6 +1345,5 @@ end
 
 include("Allocs.jl")
 include("heapsnapshot_reassemble.jl")
-include("precompile.jl")
 
 end # module
