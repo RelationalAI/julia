@@ -811,7 +811,7 @@ static uint64_t old_freed_diff = 0;
 static uint64_t gc_end_time = 0;
 static int thrash_counter = 0;
 static int thrashing = 0;
-static double alpha = 0.3;
+static double alpha = 0.4;
 // global variables for GC stats
 
 // Resetting the object to a young object, this is used when marking the
