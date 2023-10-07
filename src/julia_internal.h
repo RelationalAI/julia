@@ -263,6 +263,7 @@ extern volatile size_t profile_bt_size_max;
 extern volatile size_t profile_bt_size_cur;
 extern volatile int profile_running;
 extern volatile int profile_all_tasks;
+extern int heartbeat_tid; // Mostly used to ensure we skip this thread in the CPU profiler. XXX: not implemented on Windows
 // Ensures that we can safely read the `live_tasks`field of every TLS when profiling.
 // We want to avoid the case that a GC gets interleaved with `jl_profile_task` and shrinks
 // the `live_tasks` array while we are reading it or frees tasks that are being profiled.
@@ -278,6 +279,7 @@ extern uv_mutex_t bt_data_prof_lock;
 #define PROFILE_STATE_THREAD_NOT_SLEEPING (1)
 #define PROFILE_STATE_THREAD_SLEEPING (2)
 #define PROFILE_STATE_WALL_TIME_PROFILING (3)
+extern _Atomic(int) n_threads_running;
 void jl_profile_task(void);
 #if defined(_OS_WINDOWS_) && defined(_CPU_X86_64_)
 JL_DLLEXPORT void jl_set_profile_abort_ptr(_Atomic(int) *abort_ptr) JL_NOTSAFEPOINT;
