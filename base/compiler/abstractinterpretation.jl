@@ -1894,7 +1894,7 @@ function abstract_call_unionall(interp::AbstractInterpreter, argtypes::Vector{An
         body = a3.parameters[1]
         canconst = false
     else
-        return CallMeta(Any, EFFECTS_THROWS, NoCallInfo())
+        return CallMeta(Any, EFFECTS_THROWS, call.info)
     end
     if !(isa(body, Type) || isa(body, TypeVar))
         return CallMeta(Any, EFFECTS_THROWS, NoCallInfo())
