@@ -1878,12 +1878,12 @@ function abstract_call_unionall(interp::AbstractInterpreter, argtypes::Vector{An
         end
         a2 = argtypes[2]
         a3 = unwrapva(argtypes[3])
-        canconst = nothrow = false
+        nothrow = false
     elseif na == 3
         a2 = argtypes[2]
         a3 = argtypes[3]
         ⊑ᵢ = ⊑(typeinf_lattice(interp))
-        canconst = nothrow = a2 ⊑ᵢ TypeVar && (a3 ⊑ᵢ Type || a3 ⊑ᵢ TypeVar)
+        nothrow = a2 ⊑ᵢ TypeVar && (a3 ⊑ᵢ Type || a3 ⊑ᵢ TypeVar)
     else
         return CallMeta(Bottom, EFFECTS_THROWS, NoCallInfo())
     end
@@ -1894,7 +1894,7 @@ function abstract_call_unionall(interp::AbstractInterpreter, argtypes::Vector{An
         body = a3.parameters[1]
         canconst = false
     else
-        return CallMeta(Any, EFFECTS_THROWS, call.info)
+        return CallMeta(Any, Effects(EFFECTS_TOTAL; nothrow), NoCallInfo())
     end
     if !(isa(body, Type) || isa(body, TypeVar))
         return CallMeta(Any, EFFECTS_THROWS, NoCallInfo())
