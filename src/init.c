@@ -614,6 +614,11 @@ static NOINLINE void _finish_jl_init_(jl_image_buf_t sysimage, jl_ptls_t ptls, j
     jl_start_gc_threads();
     uv_barrier_wait(&thread_init_done);
 
+    if (jl_base_module != NULL) {
+        // requires code in Base
+        jl_init_heartbeat();
+    }
+
     jl_gc_enable(1);
 
     if ((sysimage.kind != JL_IMAGE_KIND_NONE) &&
