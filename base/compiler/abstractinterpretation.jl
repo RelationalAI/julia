@@ -1871,14 +1871,16 @@ end
 function abstract_call_unionall(interp::AbstractInterpreter, argtypes::Vector{Any})
     na = length(argtypes)
     if isvarargtype(argtypes[end])
-        if na ≤ 2
-            return CallMeta(Any, EFFECTS_THROWS, NoCallInfo())
-        elseif na > 4
-            return CallMeta(Bottom, EFFECTS_THROWS, NoCallInfo())
-        end
-        a2 = argtypes[2]
-        a3 = unwrapva(argtypes[3])
-        nothrow = false
+        return CallMeta(Any, EFFECTS_THROWS, NoCallInfo())
+        # TODO revive this piece of code once we get a reproducer for #51603
+        # if na ≤ 2
+        #     return CallMeta(Any, EFFECTS_THROWS, NoCallInfo())
+        # elseif na > 4
+        #     return CallMeta(Bottom, EFFECTS_THROWS, NoCallInfo())
+        # end
+        # a2 = argtypes[2]
+        # a3 = unwrapva(argtypes[3])
+        # nothrow = false
     elseif na == 3
         a2 = argtypes[2]
         a3 = argtypes[3]
