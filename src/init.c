@@ -843,6 +843,8 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
     _finish_julia_init(rel, ptls, ct);
 }
 
+void jl_init_heartbeat(void);
+
 static NOINLINE void _finish_julia_init(JL_IMAGE_SEARCH rel, jl_ptls_t ptls, jl_task_t *ct)
 {
     JL_TIMING(JULIA_INIT, JULIA_INIT);
@@ -889,6 +891,8 @@ static NOINLINE void _finish_julia_init(JL_IMAGE_SEARCH rel, jl_ptls_t ptls, jl_
         post_image_load_hooks();
     }
     jl_start_threads();
+
+    jl_init_heartbeat();
 
     jl_gc_enable(1);
 
