@@ -864,6 +864,8 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
     _finish_julia_init(rel, ptls, ct);
 }
 
+void jl_init_heartbeat(void);
+
 static NOINLINE void _finish_julia_init(JL_IMAGE_SEARCH rel, jl_ptls_t ptls, jl_task_t *ct)
 {
     JL_TIMING(JULIA_INIT, JULIA_INIT);
@@ -916,6 +918,11 @@ static NOINLINE void _finish_julia_init(JL_IMAGE_SEARCH rel, jl_ptls_t ptls, jl_
     jl_start_threads();
     jl_start_gc_threads();
     uv_barrier_wait(&thread_init_done);
+
+    if (jl_base_module != NULL) {
+        // requires code in Base
+        jl_init_heartbeat();
+    }
 
     jl_gc_enable(1);
 
