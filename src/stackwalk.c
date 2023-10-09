@@ -1672,6 +1672,8 @@ JL_DLLEXPORT void jl_fprint_task_backtraces(ios_t *s, int show_done) JL_NOTSAFEP
 {
     size_t nthreads = jl_atomic_load_acquire(&jl_n_threads);
     jl_ptls_t *allstates = jl_atomic_load_relaxed(&jl_all_tls_states);
+    int ctid = jl_threadid() + 1;
+    jl_safe_fprintf(s, "thread (%d) ++++ Task backtraces\n", ctid);
     for (size_t i = 0; i < nthreads; i++) {
         jl_ptls_t ptls2 = allstates[i];
         if (gc_is_collector_thread(i)) {
@@ -1687,17 +1689,17 @@ JL_DLLEXPORT void jl_fprint_task_backtraces(ios_t *s, int show_done) JL_NOTSAFEP
         jl_task_t *t = ptls2->root_task;
         if (t != NULL)
             t_state = jl_atomic_load_relaxed(&t->_state);
-        jl_safe_fprintf(s, "==== Thread %d created %zu live tasks\n",
+        jl_safe_fprintf(s, "thread (%d) ==== Thread %d created %zu live tasks\n", ctid,
                 ptls2->tid + 1, n + (t_state != JL_TASK_STATE_DONE));
         if (show_done || t_state != JL_TASK_STATE_DONE) {
-            jl_safe_fprintf(s, "     ---- Root task (%p)\n", ptls2->root_task);
+            jl_safe_fprintf(s, "thread (%d)     ---- Root task (%p)\n", ctid, ptls2->root_task);
             if (t != NULL) {
-                jl_safe_fprintf(s, "          (sticky: %d, started: %d, state: %d, tid: %d)\n",
+                jl_safe_fprintf(s, "thread (%d)          (sticky: %d, started: %d, state: %d, tid: %d)\n", ctid,
                         t->sticky, t->ctx.started, t_state,
                         jl_atomic_load_relaxed(&t->tid) + 1);
                 jl_fprint_backtracet(s, t);
             }
-            jl_safe_fprintf(s, "     ---- End root task\n");
+            jl_safe_fprintf(s, "thread (%d)     ---- End root task\n", ctid);
         }
 
         for (size_t j = 0; j < n; j++) {
@@ -1707,17 +1709,17 @@ JL_DLLEXPORT void jl_fprint_task_backtraces(ios_t *s, int show_done) JL_NOTSAFEP
             int t_state = jl_atomic_load_relaxed(&t->_state);
             if (!show_done && t_state == JL_TASK_STATE_DONE)
                 continue;
-            jl_safe_fprintf(s, "     ---- Task %zu (%p)\n", j + 1, t);
+            jl_safe_fprintf(s, "thread (%d)     ---- Task %zu (%p)\n", ctid, j + 1, t);
             // n.b. this information might not be consistent with the stack printing after it, since it could start running or change tid, etc.
-            jl_safe_fprintf(s, "          (sticky: %d, started: %d, state: %d, tid: %d)\n",
+            jl_safe_fprintf(s, "thread (%d)          (sticky: %d, started: %d, state: %d, tid: %d)\n", ctid,
                     t->sticky, t->ctx.started, t_state,
                     jl_atomic_load_relaxed(&t->tid) + 1);
-            jl_fprint_backtracet(ios_safe_stderr, t);
-            jl_safe_fprintf(s, "     ---- End task %zu\n", j + 1);
+            jl_fprint_backtracet(s, t);
+            jl_safe_fprintf(s, "thread (%d)     ---- End task %zu\n", ctid, j + 1);
         }
-        jl_safe_fprintf(s, "==== End thread %d\n", ptls2->tid + 1);
+        jl_safe_fprintf(s, "thread (%d) ==== End thread %d\n", ctid, ptls2->tid + 1);
     }
-    jl_safe_fprintf(s, "==== Done\n");
+    jl_safe_fprintf(s, "thread (%d) ++++ Done\n", ctid);
 }
 
 // Print backtraces for all live tasks, for all threads, to jl_safe_printf stderr
