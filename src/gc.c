@@ -3754,14 +3754,19 @@ void jl_gc_init(void)
 
 #ifdef _P64
     total_mem = uv_get_total_memory();
-    uint64_t constrained_mem = uv_get_constrained_memory();
-    if (constrained_mem > 0 && constrained_mem < total_mem)
-        jl_gc_set_max_memory(constrained_mem - 250*1024*1024); // LLVM + other libraries need some amount of memory
-#endif
-    if (jl_options.heap_size_hint)
-        jl_gc_set_max_memory(jl_options.heap_size_hint - 250*1024*1024);
-
-    t_start = jl_hrtime();
+     uint64_t constrained_mem = uv_get_constrained_memory();
+     if (constrained_mem > 0 && constrained_mem < total_mem)
+         total_mem = constrained_mem;
+     double percent;
+     if (total_mem < 128e9)
+         percent = total_mem * 2.34375e-12 + 0.6; // 60% at 0 gigs and 90% at 128 to not
+     else                                         // overcommit too much on memory contrained devices
+         percent = 0.9;
+     max_total_memory = total_mem * percent;
+ #endif
+     if (jl_options.heap_size_hint)
+         jl_gc_set_max_memory(jl_options.heap_size_hint);
+     t_start = jl_hrtime();
 }
 
 void jl_gc_set_max_memory(uint64_t max_mem) {
