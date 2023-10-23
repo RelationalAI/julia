@@ -178,6 +178,7 @@ typedef struct _jl_gc_pagemeta_t {
     uint16_t fl_begin_offset; // offset of first free object in this page
     uint16_t fl_end_offset;   // offset of last free object in this page
     uint16_t thread_n;        // thread id of the heap that owns this page
+    uint32_t alloc_age;       // page allocation age (e.g. it was allocated between the nth-(n+1)th GCs)
     char *data;
 } jl_gc_pagemeta_t;
 

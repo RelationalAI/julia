@@ -11,6 +11,8 @@
 extern "C" {
 #endif
 
+// Number of collections that happened so far
+size_t n_collections_so_far;
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
 // Number of threads sweeping
@@ -1344,6 +1346,7 @@ STATIC_INLINE jl_taggedvalue_t *gc_reset_page(jl_ptls_t ptls2, const jl_gc_pool_
     pg->nold = 0;
     pg->fl_begin_offset = UINT16_MAX;
     pg->fl_end_offset = UINT16_MAX;
+    pg->alloc_age = n_collections_so_far;
     return beg;
 }
 
@@ -1674,6 +1677,11 @@ void gc_free_pages(void)
     }
 }
 
+static int gc_pg_cmp(jl_gc_pagemeta_t *pg, jl_gc_pagemeta_t *pg2)
+{
+    return (pg2->alloc_age - pg->alloc_age);
+}
+
 // setup the data-structures for a sweep over all memory pools
 static void gc_sweep_pool(void)
 {
@@ -1746,15 +1754,28 @@ static void gc_sweep_pool(void)
         }
     }
 
+    // create a temporary array of pages to sort them
+    ws_queue_t queue;
+    memset(&queue, 0, sizeof(ws_queue_t));
+    queue.array = create_ws_array((1 << 10), sizeof(jl_gc_pagemeta_t*));
     // merge free lists
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 == NULL) {
             continue;
         }
+        jl_atomic_store_relaxed(&queue.bottom, 0);
         jl_gc_pagemeta_t *pg = jl_atomic_load_relaxed(&ptls2->page_metadata_allocd.bottom);
         while (pg != NULL) {
+            ws_queue_push(&queue, &pg, sizeof(jl_gc_pagemeta_t*));
             jl_gc_pagemeta_t *pg2 = pg->next;
+            pg = pg2;
+        }
+        // sort by number of free objects in ascending order
+        int64_t b = jl_atomic_load_relaxed(&queue.bottom);
+        qsort(queue.array->buffer, b, sizeof(jl_gc_pagemeta_t*), (int (*)(const void *, const void *))gc_pg_cmp);
+        for (int i = 0; i < b; i++) {
+            jl_gc_pagemeta_t *pg = ((jl_gc_pagemeta_t**)queue.array->buffer)[i];
             if (pg->fl_begin_offset != UINT16_MAX) {
                 char *cur_pg = pg->data;
                 jl_taggedvalue_t *fl_beg = (jl_taggedvalue_t*)(cur_pg + pg->fl_begin_offset);
@@ -1762,9 +1783,10 @@ static void gc_sweep_pool(void)
                 *pfl[t_i * JL_GC_N_POOLS + pg->pool_n] = fl_beg;
                 pfl[t_i * JL_GC_N_POOLS + pg->pool_n] = &fl_end->next;
             }
-            pg = pg2;
         }
     }
+    free(queue.array->buffer);
+    free(queue.array);
 
     // null out terminal pointers of free lists
     for (int t_i = 0; t_i < n_threads; t_i++) {
@@ -3239,6 +3261,7 @@ size_t jl_maxrss(void);
 // Only one thread should be running in this function
 static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
 {
+    n_collections_so_far++;
     combine_thread_gc_counts(&gc_num);
 
     jl_gc_markqueue_t *mq = &ptls->mark_queue;
