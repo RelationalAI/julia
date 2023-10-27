@@ -78,6 +78,16 @@ jl_raw_backtrace_t get_raw_backtrace() JL_NOTSAFEPOINT {
 
 extern "C" {  // Needed since these functions doesn't take any arguments.
 
+extern int num_boxes = 0;
+
+JL_DLLEXPORT int jl_get_num_boxes() {
+    return num_boxes;
+}
+
+JL_DLLEXPORT void jl_nhd_log_box() {
+    num_boxes++;
+}
+
 JL_DLLEXPORT void jl_start_alloc_profile(double sample_rate) {
     // We only need to do this once, the first time this is called.
     size_t nthreads = jl_atomic_load_acquire(&jl_n_threads);

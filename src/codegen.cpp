@@ -889,6 +889,13 @@ static const auto jlegalx_func = new JuliaFunction{
             AttributeSet(),
             None); },
 };
+static const auto jl_log_box_func = new JuliaFunction{
+   XSTR(jl_nhd_log_box),
+   [](LLVMContext &C) {
+       return FunctionType::get(getVoidTy(C), {}, false);
+   },
+   nullptr,
+};
 static const auto jl_alloc_obj_func = new JuliaFunction{
     "julia.gc_alloc_obj",
     [](LLVMContext &C) {
@@ -4072,7 +4079,7 @@ static CallInst *emit_jlcall(jl_codectx_t &ctx, FunctionCallee theFptr, Value *t
     if (theF)
         theArgs.push_back(theF);
     for (size_t i = 0; i < nargs; i++) {
-        Value *arg = boxed(ctx, argv[i]);
+        Value *arg = boxed(ctx, argv[i], true); // log the boxes
         theArgs.push_back(arg);
     }
     CallInst *result = ctx.builder.CreateCall(TheTrampoline, theArgs);
