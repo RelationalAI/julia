@@ -17,6 +17,12 @@ extern "C" {
 // Forward-declaration to avoid dependency in header file.
 struct jl_raw_alloc_t;  // Defined in gc-alloc-profiler.cpp
 
+enum jl_count_box_type {
+    JL_DONT_LOG_BOX,
+    JL_COUNT_BOX_INPUTS,
+    JL_COUNT_BOX_RETURNS,
+};
+
 typedef struct {
     struct jl_raw_alloc_t *allocs;
     size_t num_allocs;

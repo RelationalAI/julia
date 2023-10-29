@@ -352,7 +352,6 @@
     XX(jl_new_method_table) \
     XX(jl_new_method_uninit) \
     XX(jl_new_module) \
-    XX(jl_get_num_boxes) \
     XX(jl_new_primitivetype) \
     XX(jl_new_struct) \
     XX(jl_new_structt) \

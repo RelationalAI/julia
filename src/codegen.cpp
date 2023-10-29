@@ -889,10 +889,17 @@ static const auto jlegalx_func = new JuliaFunction{
             AttributeSet(),
             None); },
 };
-static const auto jl_log_box_func = new JuliaFunction{
-   XSTR(jl_nhd_log_box),
+static const auto jl_log_box_func_INPUTS = new JuliaFunction{
+   XSTR(jl_nhd_log_box_input),
    [](LLVMContext &C) {
-       return FunctionType::get(getVoidTy(C), {getInt8PtrTy(C)}, false);
+       return FunctionType::get(getVoidTy(C), {}, false);
+   },
+   nullptr,
+};
+static const auto jl_log_box_func_RETURNS = new JuliaFunction{
+   XSTR(jl_nhd_log_box_return),
+   [](LLVMContext &C) {
+       return FunctionType::get(getVoidTy(C), {}, false);
    },
    nullptr,
 };
@@ -4079,7 +4086,7 @@ static CallInst *emit_jlcall(jl_codectx_t &ctx, FunctionCallee theFptr, Value *t
     if (theF)
         theArgs.push_back(theF);
     for (size_t i = 0; i < nargs; i++) {
-        Value *arg = boxed(ctx, argv[i], false, "input to jlcall"); // log the boxes
+        Value *arg = boxed(ctx, argv[i], false, JL_COUNT_BOX_INPUTS); // log the boxes
         theArgs.push_back(arg);
     }
     CallInst *result = ctx.builder.CreateCall(TheTrampoline, theArgs);
@@ -6734,7 +6741,7 @@ static Function *gen_invoke_wrapper(jl_method_instance_t *lam, jl_value_t *jlret
         }
     }
     // NOTE(PR): log this box for the return values
-    ctx.builder.CreateRet(boxed(ctx, retval, false, "boxed return value"));
+    ctx.builder.CreateRet(boxed(ctx, retval, false, JL_COUNT_BOX_RETURNS));
     return w;
 }
 
@@ -8012,7 +8019,7 @@ static jl_llvm_functions_t
             switch (returninfo.cc) {
             case jl_returninfo_t::Boxed:
                 // NOTE(PR): here? return values?
-                retval = boxed(ctx, retvalinfo, false, "boxed return value"); // skip the gcroot on the return path
+                retval = boxed(ctx, retvalinfo, false, JL_COUNT_BOX_RETURNS); // skip the gcroot on the return path
                 break;
             case jl_returninfo_t::Register:
                 if (type_is_ghost(retty))
@@ -8241,7 +8248,7 @@ static jl_llvm_functions_t
                         // Includes the jl_is_uniontype(phiType) && !TindexN case
                         // TODO: if convert_julia_type says it is wasted effort and to skip it, is it worth using Constant::getNullValue(ctx.types().T_prjlvalue) (dynamically)?
                         // NOTE(PR): This one is the boxing for hash.
-                        V = boxed(ctx, val, false, "input to jlcall");
+                        V = boxed(ctx, val, false, JL_COUNT_BOX_INPUTS);
                     }
                     else {
                         // must be careful to emit undef here (rather than a bitcast or
