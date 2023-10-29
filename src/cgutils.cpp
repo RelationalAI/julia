@@ -999,7 +999,7 @@ static LoadInst *emit_nthptr_recast(jl_codectx_t &ctx, Value *v, Value *idx, MDN
     return load;
 }
 
-static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &v,  bool is_promotable=false, bool log=false);
+static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &v,  bool is_promotable=false, const char *log_reason=NULL);
 static Value *emit_typeof(jl_codectx_t &ctx, Value *v, bool maybenull);
 
 static jl_cgval_t emit_typeof(jl_codectx_t &ctx, const jl_cgval_t &p, bool maybenull)
@@ -3305,7 +3305,7 @@ static void recursively_adjust_ptr_type(llvm::Value *Val, unsigned FromAS, unsig
 // dynamically-typed value is required (e.g. argument to unknown function).
 // if it's already a pointer it's left alone.
 // Returns ctx.types().T_prjlvalue
-static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotable, bool log_box)
+static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotable, const char *log_reason)
 {
     jl_value_t *jt = vinfo.typ;
     if (jt == jl_bottom_type || jt == NULL)
@@ -3322,11 +3322,10 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
         return vinfo.V;
     }
 
-    //printf("NHD was here instead: %d!\n", log_box);
-    if (log_box) {
-        //printf("NHD log_box");
+    if (log_reason != NULL) {
         Function *F = prepare_call(jl_log_box_func);
-        auto call = ctx.builder.CreateCall(F, {});
+        auto call = ctx.builder.CreateCall(F,
+            stringConstPtr(ctx.emission_context, ctx.builder, log_reason));
     }
 
     Value *box;

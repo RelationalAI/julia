@@ -7,6 +7,7 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 using std::string;
 using std::vector;
@@ -74,18 +75,52 @@ jl_raw_backtrace_t get_raw_backtrace() JL_NOTSAFEPOINT {
     };
 }
 
+static auto num_boxes = std::map<string, int>();
+
+#include <utility>
+#include <numeric>
+#include <iostream>
+
 // == exported interface ==
 
 extern "C" {  // Needed since these functions doesn't take any arguments.
 
-extern int num_boxes = 0;
-
-JL_DLLEXPORT int jl_get_num_boxes() {
-    return num_boxes;
+JL_DLLEXPORT int jl_nhd_total_boxes() {
+       // sum[v for (k,v) in num_boxes]
+       return (int)std::accumulate(
+            std::begin(num_boxes), std::end(num_boxes), 0,
+            [](const std::size_t previous, const auto& element)
+            { return previous + element.second; });
 }
 
-JL_DLLEXPORT void jl_nhd_log_box() {
-    num_boxes++;
+JL_DLLEXPORT jl_value_t* jl_get_num_boxes_keys() {
+    jl_array_t* v = jl_alloc_array_1d(jl_array_any_type, num_boxes.size());
+    int i = 0;
+    for (auto it = num_boxes.begin(); it != num_boxes.end(); ++it) {
+        auto key = it->first;
+        jl_array_ptr_set(v, i, jl_cstr_to_string(key.c_str()));
+        i += 1;
+    }
+    return (jl_value_t*)v;
+}
+
+JL_DLLEXPORT int jl_get_num_boxes(const char* key) {
+    std::string str_key = std::string(key);
+    if (num_boxes.find(str_key) == num_boxes.end()) {
+        return 0;
+    }
+    return num_boxes.at(str_key);
+}
+
+JL_DLLEXPORT void jl_nhd_log_box(const char* key) {
+    std::string str_key = std::string(key);
+    //std::cout << "jl_nhd_log_box: " << str_key << "\n";
+    // If the key doesn't exist, create it with 1:
+    if (num_boxes.find(str_key) == num_boxes.end()) {
+        num_boxes.insert(std::pair<string, int>(str_key, 1));
+    } else {
+        num_boxes[str_key]++;
+    }
 }
 
 JL_DLLEXPORT void jl_start_alloc_profile(double sample_rate) {
