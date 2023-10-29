@@ -83,17 +83,17 @@ jl_raw_backtrace_t get_raw_backtrace() JL_NOTSAFEPOINT {
 
 extern "C" {  // Needed since these functions doesn't take any arguments.
 
-extern int num_boxes_inputs = 0;
-extern int num_boxes_returns = 0;
+extern uint64_t num_boxes_inputs = 0;
+extern uint64_t num_boxes_returns = 0;
 
-JL_DLLEXPORT int jl_nhd_total_boxes() {
+JL_DLLEXPORT uint64_t jl_nhd_total_boxes() {
     return num_boxes_inputs + num_boxes_returns;
 }
 
-JL_DLLEXPORT int jl_nhd_boxes_inputs() {
+JL_DLLEXPORT uint64_t jl_nhd_boxes_inputs() {
     return num_boxes_inputs;
 }
-JL_DLLEXPORT int jl_nhd_boxes_returns() {
+JL_DLLEXPORT uint64_t jl_nhd_boxes_returns() {
     return num_boxes_returns;
 }
 
