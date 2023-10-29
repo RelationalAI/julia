@@ -4079,7 +4079,7 @@ static CallInst *emit_jlcall(jl_codectx_t &ctx, FunctionCallee theFptr, Value *t
     if (theF)
         theArgs.push_back(theF);
     for (size_t i = 0; i < nargs; i++) {
-        Value *arg = boxed(ctx, argv[i], true); // log the boxes
+        Value *arg = boxed(ctx, argv[i], false, true); // log the boxes
         theArgs.push_back(arg);
     }
     CallInst *result = ctx.builder.CreateCall(TheTrampoline, theArgs);
@@ -4151,6 +4151,9 @@ static jl_cgval_t emit_call_specfun_other(jl_codectx_t &ctx, jl_method_instance_
         jl_cgval_t arg = argv[i];
         if (isboxed) {
             assert(at == ctx.types().T_prjlvalue && et == ctx.types().T_prjlvalue);
+            // Note(NHD): I don't think this needs a log: this is only boxing it if it's actually
+            // needed by the callee, for already resolved static dispatch, which cannot be
+            // avoided.
             argvals[idx] = boxed(ctx, arg);
         }
         else if (et->isAggregateType()) {
@@ -6730,6 +6733,7 @@ static Function *gen_invoke_wrapper(jl_method_instance_t *lam, jl_value_t *jlret
             break;
         }
     }
+    // TODO(PR): log this box for the return values
     ctx.builder.CreateRet(boxed(ctx, retval));
     return w;
 }
@@ -7625,7 +7629,11 @@ static jl_llvm_functions_t
                 }
             }
             else {
-                Value *argp = boxed(ctx, theArg);
+                // This boxes the args?
+                // TODO(PR): What's this? It didn't seem to have any affect on hash
+                // I *think* this function is also for static, already resolved dispatch,
+                // so there's nothing that could be avoided here, and nothing to log.
+                Value *argp = boxed(ctx, theArg); //, false, true);
                 ctx.builder.CreateStore(argp, vi.boxroot);
             }
         }
@@ -8003,6 +8011,7 @@ static jl_llvm_functions_t
             Type *retty = f->getReturnType();
             switch (returninfo.cc) {
             case jl_returninfo_t::Boxed:
+                // TODO(PR): here? return values?
                 retval = boxed(ctx, retvalinfo); // skip the gcroot on the return path
                 break;
             case jl_returninfo_t::Register:
@@ -8231,7 +8240,8 @@ static jl_llvm_functions_t
                     else if (VN->getType() == ctx.types().T_prjlvalue) {
                         // Includes the jl_is_uniontype(phiType) && !TindexN case
                         // TODO: if convert_julia_type says it is wasted effort and to skip it, is it worth using Constant::getNullValue(ctx.types().T_prjlvalue) (dynamically)?
-                        V = boxed(ctx, val);
+                        // TODO(PR): This one is the boxing for hash.
+                        V = boxed(ctx, val, false, true);
                     }
                     else {
                         // must be careful to emit undef here (rather than a bitcast or
