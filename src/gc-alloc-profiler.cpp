@@ -97,10 +97,34 @@ JL_DLLEXPORT uint64_t jl_nhd_boxes_returns() {
     return num_boxes_returns;
 }
 
-JL_DLLEXPORT void jl_nhd_log_box_input() {
+static float extra_allocs_rate = 0.0f;
+JL_DLLEXPORT void jl_nhd_set_extra_allocs_rate(float rate) {
+    extra_allocs_rate = rate;
+}
+
+JL_DLLEXPORT void jl_nhd_log_box_input(jl_datatype_t* type) {
+    // Randomly, with a probability of `extra_allocs_rate`, we will allocate some number of
+    // extra objects. This is to measure the impact of reducing the number of allocations.
+    // If the rate is >1, we may allocate more than once.
+    // We pick a random number between 0 and extra_allocs_rate, then round it, and allocate
+    // that many extra objects.
+    // TODO(PR): ... Dunno why sometimes we get an invalid type in here....
+    if (jl_is_datatype(type)) {
+        float num_extra_allocs = extra_allocs_rate;
+        jl_task_t *ct = jl_current_task;                                \
+        while (num_extra_allocs > 1) {
+            num_extra_allocs--;
+            jl_gc_alloc(ct->ptls, jl_datatype_size(type), type);
+        }
+        // For the last one, we use a random float to decide whether to allocate or not.
+        float sample = float(rand()) / float(RAND_MAX);
+        if (sample < num_extra_allocs) {
+            jl_gc_alloc(ct->ptls, jl_datatype_size(type), type);
+        }
+    }
     num_boxes_inputs++;
 }
-JL_DLLEXPORT void jl_nhd_log_box_return() {
+JL_DLLEXPORT void jl_nhd_log_box_return(jl_value_t* _type) {
     num_boxes_returns++;
 }
 

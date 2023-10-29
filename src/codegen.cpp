@@ -892,14 +892,14 @@ static const auto jlegalx_func = new JuliaFunction{
 static const auto jl_log_box_func_INPUTS = new JuliaFunction{
    XSTR(jl_nhd_log_box_input),
    [](LLVMContext &C) {
-       return FunctionType::get(getVoidTy(C), {}, false);
+       return FunctionType::get(getVoidTy(C), {getInt8PtrTy(C)}, false);
    },
    nullptr,
 };
 static const auto jl_log_box_func_RETURNS = new JuliaFunction{
    XSTR(jl_nhd_log_box_return),
    [](LLVMContext &C) {
-       return FunctionType::get(getVoidTy(C), {}, false);
+       return FunctionType::get(getVoidTy(C), {getInt8PtrTy(C)}, false);
    },
    nullptr,
 };

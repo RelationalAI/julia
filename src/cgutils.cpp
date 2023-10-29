@@ -3329,7 +3329,8 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
         } else {
             F = prepare_call(jl_log_box_func_RETURNS);
         }
-        ctx.builder.CreateCall(F, {});
+        ctx.builder.CreateCall(F,
+            literal_pointer_val(ctx, (jl_value_t*)jt));
     }
 
     Value *box;
