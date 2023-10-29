@@ -179,6 +179,7 @@ exit:
     SetLastError(last_error);
 #endif
     errno = last_errno;
+    jl_atomic_fetch_add(&current_pg_count, 1);
     return meta;
 }
 
@@ -219,6 +220,7 @@ void jl_gc_free_page(jl_gc_pagemeta_t *pg) JL_NOTSAFEPOINT
     madvise(p, decommit_size, MADV_DONTNEED);
 #endif
     msan_unpoison(p, decommit_size);
+    jl_atomic_fetch_add(&current_pg_count, -1);
 }
 
 #ifdef __cplusplus
