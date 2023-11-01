@@ -104,7 +104,6 @@ include("strings/lazy.jl")
 
 # core array operations
 include("indices.jl")
-include("genericmemory.jl")
 include("array.jl")
 include("abstractarray.jl")
 

@@ -1969,12 +1969,12 @@ end
 end
 
 @testset "Intrinsic printing" begin
-    @test sprint(show, Core.Intrinsics.cglobal) == "Core.Intrinsics.cglobal"
-    @test repr(Core.Intrinsics.cglobal) == "Core.Intrinsics.cglobal"
+    @test sprint(show, Core.Intrinsics.arraylen) == "Core.Intrinsics.arraylen"
+    @test repr(Core.Intrinsics.arraylen) == "Core.Intrinsics.arraylen"
     let io = IOBuffer()
-        show(io, MIME"text/plain"(), Core.Intrinsics.cglobal)
+        show(io, MIME"text/plain"(), Core.Intrinsics.arraylen)
         str = String(take!(io))
-        @test occursin("cglobal", str)
+        @test occursin("arraylen", str)
         @test occursin("(intrinsic function", str)
     end
     @test string(Core.Intrinsics.add_int) == "add_int"

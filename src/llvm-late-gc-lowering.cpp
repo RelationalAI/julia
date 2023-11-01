@@ -378,18 +378,16 @@ static bool isSpecialPtr(Type *Ty) {
 
 // return how many Special pointers are in T (count > 0),
 // and if there is anything else in T (all == false)
-CountTrackedPointers::CountTrackedPointers(Type *T, bool ignore_loaded) {
+CountTrackedPointers::CountTrackedPointers(Type *T) {
     if (isa<PointerType>(T)) {
         if (isSpecialPtr(T)) {
-            if (ignore_loaded && T->getPointerAddressSpace() == AddressSpace::Loaded)
-                return;
             count++;
             if (T->getPointerAddressSpace() != AddressSpace::Tracked)
                 derived = true;
         }
     } else if (isa<StructType>(T) || isa<ArrayType>(T) || isa<VectorType>(T)) {
         for (Type *ElT : T->subtypes()) {
-            auto sub = CountTrackedPointers(ElT, ignore_loaded);
+            auto sub = CountTrackedPointers(ElT);
             count += sub.count;
             all &= sub.all;
             derived |= sub.derived;
@@ -404,20 +402,6 @@ CountTrackedPointers::CountTrackedPointers(Type *T, bool ignore_loaded) {
     if (count == 0)
         all = false;
 }
-
-bool hasLoadedTy(Type *T) {
-    if (isa<PointerType>(T)) {
-        if (T->getPointerAddressSpace() == AddressSpace::Loaded)
-            return true;
-    } else if (isa<StructType>(T) || isa<ArrayType>(T) || isa<VectorType>(T)) {
-        for (Type *ElT : T->subtypes()) {
-            if (hasLoadedTy(ElT))
-                return true;
-        }
-    }
-    return false;
-}
-
 
 unsigned getCompositeNumElements(Type *T) {
     if (auto *ST = dyn_cast<StructType>(T))
@@ -500,19 +484,18 @@ static std::pair<Value*,int> FindBaseValue(const State &S, Value *V, bool UseCac
             CurrentV = EEI->getVectorOperand();
         }
         else if (auto LI = dyn_cast<LoadInst>(CurrentV)) {
-            if (hasLoadedTy(LI->getType())) {
-                // This is the old (now deprecated) implementation for loaded.
-                // New code should use the gc_loaded intrinsic to ensure that
-                // the load is paired with the correct Tracked value.
-                CurrentV = LI->getPointerOperand();
-                fld_idx = -1;
-                if (!isSpecialPtr(CurrentV->getType())) {
-                    // This could really be anything, but it's not loaded
-                    // from a tracked pointer, so it doesn't matter what
-                    // it is--just pick something simple.
-                    CurrentV = ConstantPointerNull::get(Type::getInt8PtrTy(V->getContext()));
+            if (auto PtrT = dyn_cast<PointerType>(LI->getType()->getScalarType())) {
+                if (PtrT->getAddressSpace() == AddressSpace::Loaded) {
+                    CurrentV = LI->getPointerOperand();
+                    fld_idx = -1;
+                    if (!isSpecialPtr(CurrentV->getType())) {
+                        // This could really be anything, but it's not loaded
+                        // from a tracked pointer, so it doesn't matter what
+                        // it is--just pick something simple.
+                        CurrentV = ConstantPointerNull::get(Type::getInt8PtrTy(V->getContext()));
+                    }
+                    continue;
                 }
-                continue;
             }
             // In general a load terminates a walk
             break;
@@ -534,41 +517,35 @@ static std::pair<Value*,int> FindBaseValue(const State &S, Value *V, bool UseCac
             if (II->getIntrinsicID() == Intrinsic::masked_load ||
                 II->getIntrinsicID() == Intrinsic::masked_gather) {
                 if (auto VTy = dyn_cast<VectorType>(II->getType())) {
-                    if (hasLoadedTy(VTy->getElementType())) {
-                        Value *Mask = II->getOperand(2);
-                        Value *Passthrough = II->getOperand(3);
-                        if (!isa<Constant>(Mask) || !cast<Constant>(Mask)->isAllOnesValue()) {
-                            assert(isa<UndefValue>(Passthrough) && "unimplemented");
-                            (void)Passthrough;
-                        }
-                        CurrentV = II->getOperand(0);
-                        if (II->getIntrinsicID() == Intrinsic::masked_load) {
-                            fld_idx = -1;
-                            if (!isSpecialPtr(CurrentV->getType())) {
-                                CurrentV = ConstantPointerNull::get(Type::getInt8PtrTy(V->getContext()));
+                    if (auto PtrT = dyn_cast<PointerType>(VTy->getElementType())) {
+                        if (PtrT->getAddressSpace() == AddressSpace::Loaded) {
+                            Value *Mask = II->getOperand(2);
+                            Value *Passthrough = II->getOperand(3);
+                            if (!isa<Constant>(Mask) || !cast<Constant>(Mask)->isAllOnesValue()) {
+                                assert(isa<UndefValue>(Passthrough) && "unimplemented");
+                                (void)Passthrough;
                             }
-                        } else {
-                            if (auto VTy2 = dyn_cast<VectorType>(CurrentV->getType())) {
-                                if (!isSpecialPtr(VTy2->getElementType())) {
+                            CurrentV = II->getOperand(0);
+                            if (II->getIntrinsicID() == Intrinsic::masked_load) {
+                                fld_idx = -1;
+                                if (!isSpecialPtr(CurrentV->getType())) {
                                     CurrentV = ConstantPointerNull::get(Type::getInt8PtrTy(V->getContext()));
-                                    fld_idx = -1;
+                                }
+                            } else {
+                                if (auto VTy2 = dyn_cast<VectorType>(CurrentV->getType())) {
+                                    if (!isSpecialPtr(VTy2->getElementType())) {
+                                        CurrentV = ConstantPointerNull::get(Type::getInt8PtrTy(V->getContext()));
+                                        fld_idx = -1;
+                                    }
                                 }
                             }
+                            continue;
                         }
-                        continue;
                     }
                 }
                 // In general a load terminates a walk
                 break;
             }
-        }
-        else if (auto CI = dyn_cast<CallInst>(CurrentV)) {
-            auto callee = CI->getCalledFunction();
-            if (callee && callee->getName() == "julia.gc_loaded") {
-                CurrentV = CI->getArgOperand(0);
-                continue;
-            }
-            break;
         }
         else {
             break;
@@ -661,12 +638,15 @@ void LateLowerGCFrame::LiftSelect(State &S, SelectInst *SI) {
         // already visited here--nothing to do
         return;
     }
-    assert(!isTrackedValue(SI));
     SmallVector<int, 0> Numbers;
     unsigned NumRoots = 1;
-    Type *STy = SI->getType();
-    if (!isa<PointerType>(STy))
-        Numbers.resize(CountTrackedPointers(STy).count, -1);
+    if (auto VTy = dyn_cast<VectorType>(SI->getType())) {
+        ElementCount EC = VTy->getElementCount();
+        Numbers.resize(EC.getKnownMinValue(), -1);
+    }
+    else
+        assert(isa<PointerType>(SI->getType()) && "unimplemented");
+    assert(!isTrackedValue(SI));
     // find the base root for the arguments
     Value *TrueBase = MaybeExtractScalar(S, FindBaseValue(S, SI->getTrueValue(), false), SI);
     Value *FalseBase = MaybeExtractScalar(S, FindBaseValue(S, SI->getFalseValue(), false), SI);
@@ -743,17 +723,20 @@ void LateLowerGCFrame::LiftPhi(State &S, PHINode *Phi) {
     SmallVector<PHINode *, 2> lifted;
     SmallVector<int, 0> Numbers;
     unsigned NumRoots = 1;
-    Type *PTy = Phi->getType();
-    if (!isa<PointerType>(PTy)) {
-        NumRoots = CountTrackedPointers(PTy).count;
+    if (auto VTy = dyn_cast<FixedVectorType>(Phi->getType())) {
+        NumRoots = VTy->getNumElements();
         Numbers.resize(NumRoots);
+    }
+    else {
+        // TODO: SVE
+        assert(isa<PointerType>(Phi->getType()) && "unimplemented");
     }
     for (unsigned i = 0; i < NumRoots; ++i) {
         PHINode *lift = PHINode::Create(T_prjlvalue, Phi->getNumIncomingValues(), "gclift", Phi);
         int Number = ++S.MaxPtrNumber;
         S.AllPtrNumbering[lift] = Number;
         S.ReversePtrNumbering[Number] = lift;
-        if (isa<PointerType>(PTy))
+        if (!isa<VectorType>(Phi->getType()))
             S.AllPtrNumbering[Phi] = Number;
         else
             Numbers[i] = Number;
@@ -1193,7 +1176,7 @@ static bool isLoadFromImmut(LoadInst *LI)
     if (LI->getMetadata(LLVMContext::MD_invariant_load))
         return true;
     MDNode *TBAA = LI->getMetadata(LLVMContext::MD_tbaa);
-    if (isTBAA(TBAA, {"jtbaa_immut", "jtbaa_const", "jtbaa_datatype", "jtbaa_memoryptr", "jtbaa_memorylen", "jtbaa_memoryown"}))
+    if (isTBAA(TBAA, {"jtbaa_immut", "jtbaa_const", "jtbaa_datatype"}))
         return true;
     return false;
 }
@@ -1248,10 +1231,6 @@ static bool isLoadFromConstGV(Value *v, bool &task_local, PhiSet *seen = nullptr
             task_local = true;
             return true;
         }
-        if (callee && callee->getName() == "julia.gc_loaded") {
-            return isLoadFromConstGV(call->getArgOperand(0), task_local, seen) &&
-                   isLoadFromConstGV(call->getArgOperand(1), task_local, seen);
-        }
     }
     if (isa<Argument>(v)) {
         task_local = true;
@@ -1276,7 +1255,8 @@ static bool isLoadFromConstGV(LoadInst *LI, bool &task_local, PhiSet *seen)
     auto load_base = LI->getPointerOperand()->stripInBoundsOffsets();
     assert(load_base); // Static analyzer
     auto gv = dyn_cast<GlobalVariable>(load_base);
-    if (isLoadFromImmut(LI)) {
+    if (isTBAA(LI->getMetadata(LLVMContext::MD_tbaa),
+               {"jtbaa_immut", "jtbaa_const", "jtbaa_datatype"})) {
         if (gv)
             return true;
         return isLoadFromConstGV(load_base, task_local, seen);
@@ -1511,17 +1491,19 @@ State LateLowerGCFrame::LocalScan(Function &F) {
                     if (II->getIntrinsicID() == Intrinsic::masked_load ||
                         II->getIntrinsicID() == Intrinsic::masked_gather) {
                         if (auto VTy = dyn_cast<VectorType>(II->getType())) {
-                            if (CountTrackedPointers(VTy->getElementType()).count) {
-                                // LLVM sometimes tries to materialize these operations with undefined pointers in our non-integral address space.
-                                // Hopefully LLVM didn't already propagate that information and poison our users. Set those to NULL now.
-                                Value *passthru = II->getArgOperand(3);
-                                if (isa<UndefValue>(passthru)) {
-                                    II->setArgOperand(3, Constant::getNullValue(passthru->getType()));
+                            if (auto PtrT = dyn_cast<PointerType>(VTy->getElementType())) {
+                                if (isSpecialPtr(PtrT)) {
+                                    // LLVM sometimes tries to materialize these operations with undefined pointers in our non-integral address space.
+                                    // Hopefully LLVM didn't already propagate that information and poison our users. Set those to NULL now.
+                                    Value *passthru = II->getArgOperand(3);
+                                    if (isa<UndefValue>(passthru)) {
+                                        II->setArgOperand(3, Constant::getNullValue(passthru->getType()));
+                                    }
+                                    if (PtrT->getAddressSpace() == AddressSpace::Loaded) {
+                                        // These are not real defs
+                                        continue;
+                                    }
                                 }
-                            }
-                            if (hasLoadedTy(VTy->getElementType())) {
-                                // These are not real defs
-                                continue;
                             }
                         }
                     }
@@ -1530,16 +1512,13 @@ State LateLowerGCFrame::LocalScan(Function &F) {
                 if (callee && callee == typeof_func) {
                     MaybeNoteDef(S, BBS, CI, BBS.Safepoints, SmallVector<int, 1>{-2});
                 }
-                else if (callee && callee->getName() == "julia.gc_loaded") {
-                    continue;
-                }
                 else {
                     MaybeNoteDef(S, BBS, CI, BBS.Safepoints);
                 }
                 if (CI->hasStructRetAttr()) {
                     Type *ElT = getAttributeAtIndex(CI->getAttributes(), 1, Attribute::StructRet).getValueAsType();
                     assert(cast<PointerType>(CI->getArgOperand(0)->getType())->isOpaqueOrPointeeTypeMatches(getAttributeAtIndex(CI->getAttributes(), 1, Attribute::StructRet).getValueAsType()));
-                    auto tracked = CountTrackedPointers(ElT, true);
+                    auto tracked = CountTrackedPointers(ElT);
                     if (tracked.count) {
                         AllocaInst *SRet = dyn_cast<AllocaInst>((CI->arg_begin()[0])->stripInBoundsOffsets());
                         assert(SRet);
@@ -1620,7 +1599,7 @@ State LateLowerGCFrame::LocalScan(Function &F) {
                         callee == gc_preserve_end_func || callee == typeof_func ||
                         callee == pgcstack_getter || callee->getName() == XSTR(jl_egal__unboxed) ||
                         callee->getName() == XSTR(jl_lock_value) || callee->getName() == XSTR(jl_unlock_value) ||
-                        callee == write_barrier_func || callee == gc_loaded_func ||
+                        callee == write_barrier_func ||
                         callee->getName() == "memcmp") {
                         continue;
                     }
@@ -1702,8 +1681,9 @@ State LateLowerGCFrame::LocalScan(Function &F) {
                     // task but we do need to issue write barriers for when the current task dies.
                     RefinedPtr.push_back(task_local ? -1 : -2);
                 }
-                if (!hasLoadedTy(Ty))
+                if (!Ty->isPointerTy() || Ty->getPointerAddressSpace() != AddressSpace::Loaded) {
                     MaybeNoteDef(S, BBS, LI, BBS.Safepoints, std::move(RefinedPtr));
+                }
                 NoteOperandUses(S, BBS, I);
             } else if (auto *LI = dyn_cast<AtomicCmpXchgInst>(&I)) {
                 Type *Ty = LI->getNewValOperand()->getType()->getScalarType();
@@ -1865,8 +1845,7 @@ SmallVector<Value*, 0> ExtractTrackedValues(Value *Src, Type *STy, bool isptr, I
         if (ignore_field(Idxs))
             continue;
         Value *Elem = ExtractScalar(Src, STy, isptr, Idxs, irbuilder);
-        if (isTrackedValue(Elem)) // ignore addrspace Loaded when it appears
-            Ptrs.push_back(Elem);
+        Ptrs.push_back(Elem);
     }
     return Ptrs;
 }
@@ -2333,7 +2312,7 @@ bool LateLowerGCFrame::CleanupIR(Function &F, State *S, bool *CFGModified) {
             if (I->getMetadata(LLVMContext::MD_invariant_load))
                 I->setMetadata(LLVMContext::MD_invariant_load, NULL);
             if (MDNode *TBAA = I->getMetadata(LLVMContext::MD_tbaa)) {
-                if (TBAA->getNumOperands() == 4 && isTBAA(TBAA, {"jtbaa_const", "jtbaa_memoryptr", "jtbaa_memorylen", "tbaa_memoryown"})) {
+                if (TBAA->getNumOperands() == 4 && isTBAA(TBAA, {"jtbaa_const"})) {
                     MDNode *MutableTBAA = createMutableTBAAAccessTag(TBAA);
                     if (MutableTBAA != TBAA)
                         I->setMetadata(LLVMContext::MD_tbaa, MutableTBAA);
@@ -2362,13 +2341,7 @@ bool LateLowerGCFrame::CleanupIR(Function &F, State *S, bool *CFGModified) {
                 /* No replacement */
             } else if (pointer_from_objref_func != nullptr && callee == pointer_from_objref_func) {
                 auto *obj = CI->getOperand(0);
-                auto *ASCI = new AddrSpaceCastInst(obj, CI->getType(), "", CI);
-                ASCI->takeName(CI);
-                CI->replaceAllUsesWith(ASCI);
-                UpdatePtrNumbering(CI, ASCI, S);
-            } else if (gc_loaded_func != nullptr && callee == gc_loaded_func) {
-                auto *obj = CI->getOperand(1);
-                auto *ASCI = new AddrSpaceCastInst(obj, CI->getType(), "", CI);
+                auto *ASCI = new AddrSpaceCastInst(obj, JuliaType::get_pjlvalue_ty(obj->getContext()), "", CI);
                 ASCI->takeName(CI);
                 CI->replaceAllUsesWith(ASCI);
                 UpdatePtrNumbering(CI, ASCI, S);

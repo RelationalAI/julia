@@ -99,6 +99,8 @@
     /*  c interface */ \
     ADD_I(cglobal, 2) \
     ALIAS(llvmcall, llvmcall) \
+    /*  object access */ \
+    ADD_I(arraylen, 1) \
     /*  cpu feature tests */ \
     ADD_I(have_fma, 1) \
     /*  hidden intrinsics */ \

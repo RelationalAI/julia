@@ -64,9 +64,9 @@ Dict{String, Int64} with 2 entries:
 """
 mutable struct Dict{K,V} <: AbstractDict{K,V}
     # Metadata: empty => 0x00, removed => 0x7f, full => 0b1[7 most significant hash bits]
-    slots::Memory{UInt8}
-    keys::Memory{K}
-    vals::Memory{V}
+    slots::Vector{UInt8}
+    keys::Array{K,1}
+    vals::Array{V,1}
     ndel::Int
     count::Int
     age::UInt
@@ -75,15 +75,13 @@ mutable struct Dict{K,V} <: AbstractDict{K,V}
 
     function Dict{K,V}() where V where K
         n = 16
-        slots = Memory{UInt8}(undef,n)
-        fill!(slots, 0x0)
-        new(slots, Memory{K}(undef, n), Memory{V}(undef, n), 0, 0, 0, n, 0)
+        new(zeros(UInt8,n), Vector{K}(undef, n), Vector{V}(undef, n), 0, 0, 0, n, 0)
     end
     function Dict{K,V}(d::Dict{K,V}) where V where K
         new(copy(d.slots), copy(d.keys), copy(d.vals), d.ndel, d.count, d.age,
             d.idxfloor, d.maxprobe)
     end
-    function Dict{K, V}(slots::Memory{UInt8}, keys::Memory{K}, vals::Memory{V}, ndel::Int, count::Int, age::UInt, idxfloor::Int, maxprobe::Int) where {K, V}
+    function Dict{K, V}(slots, keys, vals, ndel, count, age, idxfloor, maxprobe) where {K, V}
         new(slots, keys, vals, ndel, count, age, idxfloor, maxprobe)
     end
 end
@@ -181,20 +179,18 @@ end
     h.age += 1
     h.idxfloor = 1
     if h.count == 0
-        # TODO: tryresize
-        h.slots = Memory{UInt8}(undef, newsz)
+        resize!(h.slots, newsz)
         fill!(h.slots, 0x0)
-        h.keys = Memory{K}(undef, newsz)
-        h.vals = Memory{V}(undef, newsz)
+        resize!(h.keys, newsz)
+        resize!(h.vals, newsz)
         h.ndel = 0
         h.maxprobe = 0
         return h
     end
 
-    slots = Memory{UInt8}(undef, newsz)
-    fill!(slots, 0x0)
-    keys = Memory{K}(undef, newsz)
-    vals = Memory{V}(undef, newsz)
+    slots = zeros(UInt8,newsz)
+    keys = Vector{K}(undef, newsz)
+    vals = Vector{V}(undef, newsz)
     age0 = h.age
     count = 0
     maxprobe = 0
@@ -260,10 +256,10 @@ Dict{String, Int64}()
 function empty!(h::Dict{K,V}) where V where K
     fill!(h.slots, 0x0)
     sz = length(h.slots)
-    for i in 1:sz
-        _unsetindex!(h.keys, i)
-        _unsetindex!(h.vals, i)
-    end
+    empty!(h.keys)
+    empty!(h.vals)
+    resize!(h.keys, sz)
+    resize!(h.vals, sz)
     h.ndel = 0
     h.count = 0
     h.maxprobe = 0

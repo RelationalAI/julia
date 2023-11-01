@@ -79,7 +79,6 @@ static void removeGCPreserve(CallInst *call, Instruction *val)
  *
  * * load
  * * `pointer_from_objref`
- * * `gc_loaded`
  * * Any real llvm intrinsics
  * * gc preserve intrinsics
  * * `ccall` gcroot array (`jl_roots` operand bundle)
@@ -95,6 +94,7 @@ static void removeGCPreserve(CallInst *call, Instruction *val)
  * TODO:
  * * Return twice
  * * Handle phi node.
+ * * Look through `pointer_from_objref`.
  * * Handle jl_box*
  */
 
@@ -310,9 +310,7 @@ bool Optimizer::isSafepoint(Instruction *inst)
         return false;
     if (auto callee = call->getCalledFunction()) {
         // Known functions emitted in codegen that are not safepoints
-        if (callee == pass.pointer_from_objref_func
-            || callee == pass.gc_loaded_func
-            || callee->getName() == "memcmp") {
+        if (callee == pass.pointer_from_objref_func || callee->getName() == "memcmp") {
             return false;
         }
     }
@@ -695,11 +693,6 @@ void Optimizer::moveToStack(CallInst *orig_inst, size_t sz, bool has_ref)
                 call->eraseFromParent();
                 return;
             }
-            //if (pass.gc_loaded_func == callee) {
-            //    call->replaceAllUsesWith(new_i);
-            //    call->eraseFromParent();
-            //    return;
-            //}
             if (pass.typeof_func == callee) {
                 ++RemovedTypeofs;
                 call->replaceAllUsesWith(tag);

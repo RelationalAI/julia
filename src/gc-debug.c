@@ -616,7 +616,8 @@ void objprofile_count(void *ty, int old, int sz)
         ty = (void*)jl_buff_tag;
     }
     else if (ty != (void*)jl_buff_tag && ty != jl_malloc_tag &&
-             jl_is_datatype(ty) && jl_is_datatype_singleton((jl_datatype_t*)ty)) {
+             jl_typeof(ty) == (jl_value_t*)jl_datatype_type &&
+             ((jl_datatype_t*)ty)->instance) {
         ty = jl_singleton_tag;
     }
     void **bp = ptrhash_bp(&obj_counts[old], ty);
@@ -893,29 +894,29 @@ void gc_time_big_end(void)
                    t_ms, big_freed, big_total, big_reset);
 }
 
-static int64_t mallocd_memory_total;
-static int64_t mallocd_memory_freed;
-static int64_t mallocd_memory_sweep_start;
+static int64_t mallocd_array_total;
+static int64_t mallocd_array_freed;
+static int64_t mallocd_array_sweep_start;
 
-void gc_time_mallocd_memory_start(void)
+void gc_time_mallocd_array_start(void)
 {
-    mallocd_memory_total = 0;
-    mallocd_memory_freed = 0;
-    mallocd_memory_sweep_start = jl_hrtime();
+    mallocd_array_total = 0;
+    mallocd_array_freed = 0;
+    mallocd_array_sweep_start = jl_hrtime();
 }
 
-void gc_time_count_mallocd_memory(int bits)
+void gc_time_count_mallocd_array(int bits)
 {
-    mallocd_memory_total++;
-    mallocd_memory_freed += !gc_marked(bits);
+    mallocd_array_total++;
+    mallocd_array_freed += !gc_marked(bits);
 }
 
-void gc_time_mallocd_memory_end(void)
+void gc_time_mallocd_array_end(void)
 {
-    double t_ms = jl_ns2ms(jl_hrtime() - mallocd_memory_sweep_start);
+    double t_ms = jl_ns2ms(jl_hrtime() - mallocd_array_sweep_start);
     jl_safe_printf("GC sweep arrays %.2f ms "
                    "(freed %" PRId64 " / %" PRId64 ")\n",
-                   t_ms, mallocd_memory_freed, mallocd_memory_total);
+                   t_ms, mallocd_array_freed, mallocd_array_total);
 }
 
 void gc_time_mark_pause(int64_t t0, int64_t scanned_bytes,
@@ -1110,7 +1111,7 @@ void gc_stats_big_obj(void)
         while (ma != NULL) {
             if (gc_marked(jl_astaggedvalue(ma->a)->bits.gc)) {
                 nused++;
-                nbytes += jl_genericmemory_nbytes((jl_genericmemory_t*)ma->a);
+                nbytes += jl_array_nbytes(ma->a);
             }
             ma = ma->next;
         }
@@ -1201,6 +1202,12 @@ int gc_slot_to_arrayidx(void *obj, void *_slot) JL_NOTSAFEPOINT
     else if (vt == jl_simplevector_type) {
         start = (char*)jl_svec_data(obj);
         len = jl_svec_len(obj);
+    }
+    else if (vt->name == jl_array_typename) {
+        jl_array_t *a = (jl_array_t*)obj;
+        start = (char*)a->data;
+        len = jl_array_len(a);
+        elsize = a->elsize;
     }
     if (slot < start || slot >= start + elsize * len)
         return -1;

@@ -367,9 +367,8 @@ Forces synchronization between the in-memory version of a memory-mapped `Array` 
 [`BitArray`](@ref) and the on-disk version.
 """
 function sync!(m::Array, flags::Integer=MS_SYNC)
-    ptr = pointer(m)
-    offset = rem(UInt(ptr), PAGESIZE)
-    ptr = ptr - offset
+    offset = rem(UInt(pointer(m)), PAGESIZE)
+    ptr = pointer(m) - offset
     mmaplen = sizeof(m) + offset
     GC.@preserve m @static if Sys.isunix()
         systemerror("msync",
@@ -430,9 +429,8 @@ Advises the kernel on the intended usage of the memory-mapped `array`, with the 
 `flag` being one of the available `MADV_*` constants.
 """
 function madvise!(m::Array, flag::Integer=MADV_NORMAL)
-    ptr = pointer(m)
-    offset = rem(UInt(ptr), PAGESIZE)
-    ptr = ptr - offset
+    offset = rem(UInt(pointer(m)), PAGESIZE)
+    ptr = pointer(m) - offset
     mmaplen = sizeof(m) + offset
     GC.@preserve m begin
         systemerror("madvise",

@@ -9,7 +9,7 @@
 """
 module Experimental
 
-using Base: Threads, sync_varname, is_function_def, @propagate_inbounds
+using Base: Threads, sync_varname, is_function_def
 using Base.Meta
 
 """
@@ -28,7 +28,10 @@ end
 Base.IndexStyle(::Type{<:Const}) = IndexLinear()
 Base.size(C::Const) = size(C.a)
 Base.axes(C::Const) = axes(C.a)
-@propagate_inbounds Base.getindex(A::Const, i1::Int, I::Int...) = A.a[i1, I...]
+@eval Base.getindex(A::Const, i1::Int) =
+    (Base.@inline; Core.const_arrayref($(Expr(:boundscheck)), A.a, i1))
+@eval Base.getindex(A::Const, i1::Int, i2::Int, I::Int...) =
+  (Base.@inline; Core.const_arrayref($(Expr(:boundscheck)), A.a, i1, i2, I...))
 
 """
     @aliasscope expr

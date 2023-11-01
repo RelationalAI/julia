@@ -436,7 +436,7 @@ For example:
 
 ```c
 jl_array_t *some_array = ...; // e.g. a Vector{Any}
-void **data = jl_array_data(some_array, void*);
+void **data = (void**)jl_array_data(some_array);
 jl_value_t *some_value = ...;
 data[0] = some_value;
 jl_gc_wb(some_array, some_value);
@@ -487,13 +487,13 @@ referenced.
 In order to access the data of `x`, we can use `jl_array_data`:
 
 ```c
-double *xData = jl_array_data(x, double);
+double *xData = (double*)jl_array_data(x);
 ```
 
 Now we can fill the array:
 
 ```c
-for (size_t i = 0; i < jl_array_nrows(x); i++)
+for(size_t i=0; i<jl_array_len(x); i++)
     xData[i] = i;
 ```
 
@@ -527,11 +527,10 @@ that creates a 2D array and accesses its properties:
 ```c
 // Create 2D array of float64 type
 jl_value_t *array_type = jl_apply_array_type((jl_value_t*)jl_float64_type, 2);
-int dims[] = {10,5};
-jl_array_t *x  = jl_alloc_array_nd(array_type, dims, 2);
+jl_array_t *x  = jl_alloc_array_2d(array_type, 10, 5);
 
 // Get array pointer
-double *p = jl_array_data(x, double);
+double *p = (double*)jl_array_data(x);
 // Get number of dimensions
 int ndims = jl_array_ndims(x);
 // Get the size of the i-th dim

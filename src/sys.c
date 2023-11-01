@@ -280,15 +280,14 @@ JL_DLLEXPORT jl_value_t *jl_readuntil(ios_t *s, uint8_t delim, uint8_t str, uint
             return str;
         }
         a = jl_alloc_array_1d(jl_array_uint8_type, n - nchomp);
-        memcpy(jl_array_data(a, uint8_t), s->buf + s->bpos, n - nchomp);
+        memcpy(jl_array_data(a), s->buf + s->bpos, n - nchomp);
         s->bpos += n;
     }
     else {
         a = jl_alloc_array_1d(jl_array_uint8_type, 80);
         ios_t dest;
         ios_mem(&dest, 0);
-        char *mem = jl_array_data(a, char);
-        ios_setbuf(&dest, (char*)mem, 80, 0);
+        ios_setbuf(&dest, (char*)a->data, 80, 0);
         size_t n = ios_copyuntil(&dest, s, delim, 1);
         if (chomp && n > 0 && dest.buf[n - 1] == delim) {
             n--;
@@ -299,11 +298,12 @@ JL_DLLEXPORT jl_value_t *jl_readuntil(ios_t *s, uint8_t delim, uint8_t str, uint
             assert(truncret == 0);
             (void)truncret; // ensure the variable is used to avoid warnings
         }
-        if (dest.buf != mem) {
+        if (dest.buf != a->data) {
             a = jl_take_buffer(&dest);
         }
         else {
-            a->dimsize[0] = n;
+            a->length = n;
+            a->nrows = n;
         }
         if (str) {
             JL_GC_PUSH1(&a);

@@ -260,21 +260,21 @@ JL_DLLEXPORT jl_value_t *jl_backtrace_from_here(int returnsp, int skip)
             uintptr_t *sp_ptr = NULL;
             if (returnsp) {
                 jl_array_grow_end(sp, maxincr);
-                sp_ptr = jl_array_data(sp, uintptr_t) + offset;
+                sp_ptr = (uintptr_t*)jl_array_data(sp) + offset;
             }
             size_t size_incr = 0;
-            have_more_frames = jl_unw_stepn(&cursor, jl_array_data(ip, jl_bt_element_t) + offset,
+            have_more_frames = jl_unw_stepn(&cursor, (jl_bt_element_t*)jl_array_data(ip) + offset,
                                             &size_incr, sp_ptr, maxincr, skip, &pgcstack, 0);
             skip = 0;
             offset += size_incr;
         }
-        jl_array_del_end(ip, jl_array_nrows(ip) - offset);
+        jl_array_del_end(ip, jl_array_len(ip) - offset);
         if (returnsp)
-            jl_array_del_end(sp, jl_array_nrows(sp) - offset);
+            jl_array_del_end(sp, jl_array_len(sp) - offset);
 
         size_t n = 0;
-        jl_bt_element_t *bt_data = jl_array_data(ip, jl_bt_element_t);
-        while (n < jl_array_nrows(ip)) {
+        jl_bt_element_t *bt_data = (jl_bt_element_t*)jl_array_data(ip);
+        while (n < jl_array_len(ip)) {
             jl_bt_element_t *bt_entry = bt_data + n;
             if (!jl_bt_is_native(bt_entry)) {
                 size_t njlvals = jl_bt_num_jlvals(bt_entry);
@@ -303,7 +303,7 @@ static void decode_backtrace(jl_bt_element_t *bt_data, size_t bt_size,
     bt = *btout = jl_alloc_array_1d(array_ptr_void_type, bt_size);
     static_assert(sizeof(jl_bt_element_t) == sizeof(void*),
                   "jl_bt_element_t is presented as Ptr{Cvoid} on julia side");
-    memcpy(jl_array_data(bt, jl_bt_element_t), bt_data, bt_size * sizeof(jl_bt_element_t));
+    memcpy(bt->data, bt_data, bt_size * sizeof(jl_bt_element_t));
     bt2 = *bt2out = jl_alloc_array_1d(jl_array_any_type, 0);
     // Scan the backtrace buffer for any gc-managed values
     for (size_t i = 0; i < bt_size; i += jl_bt_entry_size(bt_data + i)) {
@@ -669,7 +669,7 @@ void jl_print_bt_entry_codeloc(jl_bt_element_t *bt_entry) JL_NOTSAFEPOINT
             jl_code_info_t *src = (jl_code_info_t*)code;
             // See also the debug info handling in codegen.cpp.
             // NB: debuginfoloc is 1-based!
-            intptr_t debuginfoloc = jl_array_data(src->codelocs, int32_t)[ip];
+            intptr_t debuginfoloc = ((int32_t*)jl_array_data(src->codelocs))[ip];
             while (debuginfoloc != 0) {
                 jl_line_info_node_t *locinfo = (jl_line_info_node_t*)
                     jl_array_ptr_ref(src->linetable, debuginfoloc - 1);

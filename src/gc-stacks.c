@@ -298,7 +298,7 @@ restart:
         if (t->stkbuf != NULL) {
             if (j == l)
                 goto restart;
-            jl_array_data(a,void*)[j++] = t;
+            ((void**)jl_array_data(a))[j++] = t;
         }
         small_arraylist_t *live_tasks = &ptls2->heap.live_tasks;
         size_t n = mtarraylist_length(live_tasks);
@@ -307,7 +307,7 @@ restart:
             if (t->stkbuf != NULL) {
                 if (j == l)
                     goto restart;
-                jl_array_data(a,void*)[j++] = t;
+                ((void**)jl_array_data(a))[j++] = t;
             }
         }
     }
