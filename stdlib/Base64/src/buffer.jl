@@ -2,37 +2,37 @@
 
 # Data buffer for pipes.
 mutable struct Buffer
-    const data::Memory{UInt8}
-    offset::Int
+    data::Memory{UInt8}
+    ptr::Ptr{UInt8}
     size::Int
 
     function Buffer(bufsize)
         data = Memory{UInt8}(undef, bufsize)
-        return new(data, 0, 0)
+        return new(data, pointer(data), 0)
     end
 end
 
 Base.empty!(buffer::Buffer) = buffer.size = 0
-Base.getindex(buffer::Buffer, i::Integer) = buffer.data[buffer.offset + i]
-Base.setindex!(buffer::Buffer, v::UInt8, i::Integer) = buffer.data[buffer.offset + i] = v
+Base.getindex(buffer::Buffer, i::Integer) = unsafe_load(buffer.ptr, i)
+Base.setindex!(buffer::Buffer, v::UInt8, i::Integer) = unsafe_store!(buffer.ptr, v, i)
 Base.firstindex(buffer::Buffer) = 1
 Base.lastindex(buffer::Buffer) = buffer.size
-Base.pointer(buffer::Buffer) = pointer(buffer.data) + buffer.offset
-capacity(buffer::Buffer) = length(buffer.data) - buffer.offset
+Base.pointer(buffer::Buffer) = buffer.ptr
+capacity(buffer::Buffer) = Int(pointer(buffer.data, lastindex(buffer.data)) - buffer.ptr) + 1
 
 function consumed!(buffer::Buffer, n::Integer)
     @assert n ≤ buffer.size
-    buffer.offset += n
+    buffer.ptr += n
     buffer.size -= n
 end
 
 function read_to_buffer(io::IO, buffer::Buffer)
-    offset = buffer.offset
+    offset = buffer.ptr - pointer(buffer.data)
     copyto!(buffer.data, 1, buffer.data, offset + 1, buffer.size)
-    buffer.offset = 0
+    buffer.ptr = pointer(buffer.data)
     if !eof(io)
         n = min(bytesavailable(io), capacity(buffer) - buffer.size)
-        unsafe_read(io, pointer(buffer) + buffer.size, n)
+        unsafe_read(io, buffer.ptr + buffer.size, n)
         buffer.size += n
     end
     return
