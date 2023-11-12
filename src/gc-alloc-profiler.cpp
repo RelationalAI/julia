@@ -83,48 +83,85 @@ jl_raw_backtrace_t get_raw_backtrace() JL_NOTSAFEPOINT {
 
 extern "C" {  // Needed since these functions doesn't take any arguments.
 
-extern uint64_t num_boxes_inputs = 0;
-extern uint64_t num_boxes_returns = 0;
+uint64_t num_boxes_inputs;
+uint64_t boxed_inputs_size;
+uint64_t extra_num_boxes_inputs;
+uint64_t extra_boxed_inputs_size;
+uint64_t num_boxes_returns;
+uint64_t boxed_returns_size;
 
-JL_DLLEXPORT uint64_t jl_nhd_total_boxes() {
-    return num_boxes_inputs + num_boxes_returns;
+JL_DLLEXPORT uint64_t jl_total_boxes()
+{
+    return num_boxes_inputs + extra_num_boxes_inputs + num_boxes_returns;
 }
-
-JL_DLLEXPORT uint64_t jl_nhd_boxes_inputs() {
+JL_DLLEXPORT uint64_t jl_total_boxes_size()
+{
+    return boxed_inputs_size + extra_boxed_inputs_size + boxed_returns_size;
+}
+JL_DLLEXPORT uint64_t jl_num_boxes_inputs()
+{
     return num_boxes_inputs;
 }
-JL_DLLEXPORT uint64_t jl_nhd_boxes_returns() {
+JL_DLLEXPORT uint64_t jl_extra_num_boxes_inputs()
+{
+    return extra_num_boxes_inputs;
+}
+JL_DLLEXPORT uint64_t jl_boxed_inputs_size()
+{
+    return boxed_inputs_size;
+}
+JL_DLLEXPORT uint64_t jl_extra_boxed_inputs_size()
+{
+    return extra_boxed_inputs_size;
+}
+JL_DLLEXPORT uint64_t jl_num_boxes_returns()
+{
     return num_boxes_returns;
+}
+JL_DLLEXPORT uint64_t jl_boxed_returns_size()
+{
+    return boxed_returns_size;
 }
 
 static float extra_allocs_rate = 0.0f;
-JL_DLLEXPORT void jl_nhd_set_extra_allocs_rate(float rate) {
+JL_DLLEXPORT void jl_set_extra_allocs_rate(float rate)
+{
     extra_allocs_rate = rate;
 }
 
-JL_DLLEXPORT void jl_nhd_log_box_input(jl_datatype_t* type) {
-    // Randomly, with a probability of `extra_allocs_rate`, we will allocate some number of
-    // extra objects. This is to measure the impact of reducing the number of allocations.
-    // If the rate is >1, we may allocate more than once.
-    // We pick a random number between 0 and extra_allocs_rate, then round it, and allocate
-    // that many extra objects.
-    // TODO(PR): ... Dunno why sometimes we get an invalid type in here....
-    if (jl_is_datatype(type)) {
-        float num_extra_allocs = extra_allocs_rate;
-        jl_task_t *ct = jl_current_task;                                \
-        while (num_extra_allocs > 1) {
-            num_extra_allocs--;
-            jl_gc_alloc(ct->ptls, jl_datatype_size(type), type);
-        }
-        // For the last one, we use a random float to decide whether to allocate or not.
-        float sample = float(rand()) / float(RAND_MAX);
-        if (sample < num_extra_allocs) {
-            jl_gc_alloc(ct->ptls, jl_datatype_size(type), type);
+JL_DLLEXPORT void jl_log_box_input(jl_datatype_t* jt) {
+    // Randomly, with a probability of `extra_allocs_rate`, record some number of
+    // extra allocations. The goal is to estimate the impact of _reducing_ the
+    // number of allocations for boxing. For a rate >1, more than one allocation
+    // may be recorded: we pick a random number between 0 and extra_allocs_rate,
+    // then round it and allocate that many extra objects.
+    if (jl_is_datatype(jt)) {
+        boxed_inputs_size += jl_datatype_size(jt);
+
+        // record extra allocs if configured
+        if (extra_allocs_rate > 0.0f) {
+            float num_extra_allocs = extra_allocs_rate;
+            jl_task_t *ct = jl_current_task;                                \
+            while (num_extra_allocs > 1) {
+                num_extra_allocs--;
+                extra_num_boxes_inputs++;
+                extra_boxed_inputs_size += jl_datatype_size(jt);
+            }
+            // use a random float to decide whether to allocate or not for the last one
+            float sample = float(rand()) / float(RAND_MAX);
+            if (sample < num_extra_allocs) {
+                extra_num_boxes_inputs++;
+                extra_boxed_inputs_size += jl_datatype_size(jt);
+            }
         }
     }
     num_boxes_inputs++;
 }
-JL_DLLEXPORT void jl_nhd_log_box_return(jl_value_t* _type) {
+JL_DLLEXPORT void jl_log_box_return(jl_value_t* jt)
+{
+    if (jl_is_datatype(jt)) {
+        boxed_returns_size += jl_datatype_size(jt);
+    }
     num_boxes_returns++;
 }
 
