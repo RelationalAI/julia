@@ -351,6 +351,9 @@ typedef struct _jl_method_t {
 // hidden fields:
     // lock for modifications to the method
     jl_mutex_t writelock;
+#ifdef JL_DISPATCH_LOG_BOXES
+    uint32_t num_dynamic_dispatches;
+#endif
 } jl_method_t;
 
 // This type is a placeholder to cache data for a specType signature specialization of a Method

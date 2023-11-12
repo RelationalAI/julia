@@ -2937,8 +2937,27 @@ JL_DLLEXPORT jl_value_t *jl_apply_generic(jl_value_t *F, jl_value_t **args, uint
                                                      jl_int32hash_fast(jl_return_address()),
                                                      world);
     JL_GC_PROMISE_ROOTED(mfunc);
+#ifdef JL_DISPATCH_LOG_BOXES
+    jl_method_t *def = mfunc->def.method;
+    if (jl_is_method(def)) {
+        def->num_dynamic_dispatches++;
+    }
+#endif
     return _jl_invoke(F, args, nargs, mfunc, world);
 }
+
+#ifdef JL_DISPATCH_LOG_BOXES
+JL_DLLEXPORT uint64_t jl_get_num_dynamic_dispatches(jl_method_t *m)
+{
+    return m->num_dynamic_dispatches;
+}
+#else
+JL_DLLEXPORT uint64_t jl_get_num_dynamic_dispatches(jl_method_t *m)
+{
+    jl_error("not logging");
+    return 0;
+}
+#endif
 
 static jl_method_match_t *_gf_invoke_lookup(jl_value_t *types JL_PROPAGATES_ROOT, jl_value_t *mt, size_t world, size_t *min_valid, size_t *max_valid)
 {

@@ -806,6 +806,9 @@ JL_DLLEXPORT jl_method_t *jl_new_method_uninit(jl_module_t *module)
     m->is_for_opaque_closure = 0;
     m->constprop = 0;
     JL_MUTEX_INIT(&m->writelock);
+#ifdef JL_DISPATCH_LOG_BOXES
+    m->num_dynamic_dispatches = 0;
+#endif
     return m;
 }
 

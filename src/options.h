@@ -98,6 +98,9 @@
 // profile generic (not inlined or specialized) calls to each function
 //#define JL_GF_PROFILE
 
+// count boxes and box sizes for generic calls
+#define JL_DISPATCH_LOG_BOXES
+
 
 // task options ---------------------------------------------------------------
 
