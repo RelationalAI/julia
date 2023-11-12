@@ -999,7 +999,11 @@ static LoadInst *emit_nthptr_recast(jl_codectx_t &ctx, Value *v, Value *idx, MDN
     return load;
 }
 
+#ifdef JL_DISPATCH_LOG_BOXES
 static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &v,  bool is_promotable=false, jl_count_box_type log_reason=JL_DONT_LOG_BOX);
+#else
+static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &v,  bool is_promotable=false);
+#endif
 static Value *emit_typeof(jl_codectx_t &ctx, Value *v, bool maybenull);
 
 static jl_cgval_t emit_typeof(jl_codectx_t &ctx, const jl_cgval_t &p, bool maybenull)
@@ -3302,7 +3306,11 @@ static void recursively_adjust_ptr_type(llvm::Value *Val, unsigned FromAS, unsig
 // dynamically-typed value is required (e.g. argument to unknown function).
 // if it's already a pointer it's left alone.
 // Returns ctx.types().T_prjlvalue
+#ifdef JL_DISPATCH_LOG_BOXES
 static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotable, jl_count_box_type log_reason)
+#else
+static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotable)
+#endif
 {
     jl_value_t *jt = vinfo.typ;
     if (jt == jl_bottom_type || jt == NULL)
@@ -3319,6 +3327,7 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
         return vinfo.V;
     }
 
+#ifdef JL_DISPATCH_LOG_BOXES
     // TODO(kp): sometimes !jl_is_datatype(jt) -- why?
     if (log_reason != JL_DONT_LOG_BOX) {
         Function *F;
@@ -3330,6 +3339,7 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
         ctx.builder.CreateCall(F,
             literal_pointer_val(ctx, (jl_value_t*)jt));
     }
+#endif
 
     Value *box;
     if (vinfo.TIndex) {
