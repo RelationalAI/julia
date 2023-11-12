@@ -3319,6 +3319,7 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
         return vinfo.V;
     }
 
+    // TODO(kp): sometimes !jl_is_datatype(jt) -- why?
     if (log_reason != JL_DONT_LOG_BOX) {
         Function *F;
         if (log_reason == JL_COUNT_BOX_INPUTS) {
