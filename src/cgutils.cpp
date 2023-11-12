@@ -2671,7 +2671,6 @@ static Value *emit_arraylen_prim(jl_codectx_t &ctx, const jl_cgval_t &tinfo)
         }
     }
     ++EmittedArraylen;
-    // TODO(PR): HERE?
     Value *t = boxed(ctx, tinfo);
     Value *addr = ctx.builder.CreateStructGEP(ctx.types().T_jlarray,
             emit_bitcast(ctx, decay_derived(ctx, t), ctx.types().T_pjlarray),
@@ -2723,7 +2722,6 @@ static Value *emit_arrayptr_internal(jl_codectx_t &ctx, const jl_cgval_t &tinfo,
 
 static Value *emit_arrayptr(jl_codectx_t &ctx, const jl_cgval_t &tinfo, bool isboxed = false)
 {
-    // TODO(PR): here?
     Value *t = boxed(ctx, tinfo);
     return emit_arrayptr_internal(ctx, tinfo, decay_derived(ctx, t), AddressSpace::Loaded, isboxed);
 }
@@ -2810,7 +2808,6 @@ static Value *emit_array_nd_index(
         const jl_cgval_t *argv, size_t nidxs, jl_value_t *inbounds)
 {
     ++EmittedArrayNdIndex;
-    // TODO(PR): here?
     Value *a = boxed(ctx, ainfo);
     Value *i = Constant::getNullValue(getSizeTy(ctx.builder.getContext()));
     Value *stride = ConstantInt::get(getSizeTy(ctx.builder.getContext()), 1);

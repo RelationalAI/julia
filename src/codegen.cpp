@@ -890,14 +890,14 @@ static const auto jlegalx_func = new JuliaFunction{
             None); },
 };
 static const auto jl_log_box_func_INPUTS = new JuliaFunction{
-   XSTR(jl_nhd_log_box_input),
+   XSTR(jl_log_box_input),
    [](LLVMContext &C) {
        return FunctionType::get(getVoidTy(C), {getInt8PtrTy(C)}, false);
    },
    nullptr,
 };
 static const auto jl_log_box_func_RETURNS = new JuliaFunction{
-   XSTR(jl_nhd_log_box_return),
+   XSTR(jl_log_box_return),
    [](LLVMContext &C) {
        return FunctionType::get(getVoidTy(C), {getInt8PtrTy(C)}, false);
    },
@@ -4086,7 +4086,8 @@ static CallInst *emit_jlcall(jl_codectx_t &ctx, FunctionCallee theFptr, Value *t
     if (theF)
         theArgs.push_back(theF);
     for (size_t i = 0; i < nargs; i++) {
-        Value *arg = boxed(ctx, argv[i], false, JL_COUNT_BOX_INPUTS); // log the boxes
+        // log the boxed arguments for this call
+        Value *arg = boxed(ctx, argv[i], false, JL_COUNT_BOX_INPUTS);
         theArgs.push_back(arg);
     }
     CallInst *result = ctx.builder.CreateCall(TheTrampoline, theArgs);
@@ -4158,9 +4159,6 @@ static jl_cgval_t emit_call_specfun_other(jl_codectx_t &ctx, jl_method_instance_
         jl_cgval_t arg = argv[i];
         if (isboxed) {
             assert(at == ctx.types().T_prjlvalue && et == ctx.types().T_prjlvalue);
-            // Note(NHD): I don't think this needs a log: this is only boxing it if it's actually
-            // needed by the callee, for already resolved static dispatch, which cannot be
-            // avoided.
             argvals[idx] = boxed(ctx, arg);
         }
         else if (et->isAggregateType()) {
@@ -6740,7 +6738,7 @@ static Function *gen_invoke_wrapper(jl_method_instance_t *lam, jl_value_t *jlret
             break;
         }
     }
-    // NOTE(PR): log this box for the return values
+    // log the box for this return value
     ctx.builder.CreateRet(boxed(ctx, retval, false, JL_COUNT_BOX_RETURNS));
     return w;
 }
@@ -7636,11 +7634,7 @@ static jl_llvm_functions_t
                 }
             }
             else {
-                // This boxes the args?
-                // TODO(PR): What's this? It didn't seem to have any affect on hash
-                // I *think* this function is also for static, already resolved dispatch,
-                // so there's nothing that could be avoided here, and nothing to log.
-                Value *argp = boxed(ctx, theArg); //, false, true);
+                Value *argp = boxed(ctx, theArg);
                 ctx.builder.CreateStore(argp, vi.boxroot);
             }
         }
