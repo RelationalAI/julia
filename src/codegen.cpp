@@ -8012,8 +8012,8 @@ static jl_llvm_functions_t
             Type *retty = f->getReturnType();
             switch (returninfo.cc) {
             case jl_returninfo_t::Boxed:
-                // NOTE(PR): here? return values?
-                retval = boxed(ctx, retvalinfo, false, JL_COUNT_BOX_RETURNS); // skip the gcroot on the return path
+                // this is a boxing for a static dispatch return which happens sometimes
+                retval = boxed(ctx, retvalinfo); // skip the gcroot on the return path
                 break;
             case jl_returninfo_t::Register:
                 if (type_is_ghost(retty))
