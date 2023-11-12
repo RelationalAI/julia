@@ -1439,8 +1439,6 @@ JL_DLLEXPORT const char *jl_typename_str(jl_value_t *v) JL_NOTSAFEPOINT;
 JL_DLLEXPORT const char *jl_typeof_str(jl_value_t *v) JL_NOTSAFEPOINT;
 JL_DLLEXPORT int jl_type_morespecific(jl_value_t *a, jl_value_t *b);
 
-JL_DLLEXPORT void jl_nhd_log_box(const char* key);
-
 STATIC_INLINE int jl_is_dispatch_tupletype(jl_value_t *v) JL_NOTSAFEPOINT
 {
     return jl_is_datatype(v) && ((jl_datatype_t*)v)->isdispatchtuple;
