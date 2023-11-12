@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "options.h"
 #include "htable.h"
 #include "arraylist.h"
 #include "analyzer_annotations.h"
