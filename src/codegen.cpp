@@ -890,17 +890,17 @@ static const auto jlegalx_func = new JuliaFunction{
             None); },
 };
 #ifdef JL_DISPATCH_LOG_BOXES
-static const auto jl_log_box_func_INPUTS = new JuliaFunction{
+static const auto jllogboxinput_func = new JuliaFunction{
    XSTR(jl_log_box_input),
    [](LLVMContext &C) {
-       return FunctionType::get(getVoidTy(C), {getInt8PtrTy(C)}, false);
+       return FunctionType::get(getVoidTy(C), {getSizeTy(C)}, false);
    },
    nullptr,
 };
-static const auto jl_log_box_func_RETURNS = new JuliaFunction{
+static const auto jllogboxreturn_func = new JuliaFunction{
    XSTR(jl_log_box_return),
    [](LLVMContext &C) {
-       return FunctionType::get(getVoidTy(C), {getInt8PtrTy(C)}, false);
+       return FunctionType::get(getVoidTy(C), {getSizeTy(C)}, false);
    },
    nullptr,
 };

@@ -1110,7 +1110,6 @@ static Value *emit_datatype_size(jl_codectx_t &ctx, Value *dt)
     return ai.decorateInst(ctx.builder.CreateAlignedLoad(getInt32Ty(ctx.builder.getContext()), Ptr, Align(sizeof(int32_t))));
 }
 
-/* this is valid code, it's simply unused
 static Value *emit_sizeof(jl_codectx_t &ctx, const jl_cgval_t &p)
 {
     if (p.TIndex) {
@@ -1159,6 +1158,7 @@ static Value *emit_sizeof(jl_codectx_t &ctx, const jl_cgval_t &p)
     }
 }
 
+/* this is valid code, it's simply unused
 static Value *emit_datatype_mutabl(jl_codectx_t &ctx, Value *dt)
 {
     jl_aliasinfo_t ai = jl_aliasinfo_t::fromTBAA(ctx, ctx.tbaa().tbaa_const);
@@ -3332,12 +3332,11 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
     if (log_reason != JL_DONT_LOG_BOX) {
         Function *F;
         if (log_reason == JL_COUNT_BOX_INPUTS) {
-            F = prepare_call(jl_log_box_func_INPUTS);
+            F = prepare_call(jllogboxinput_func);
         } else {
-            F = prepare_call(jl_log_box_func_RETURNS);
+            F = prepare_call(jllogboxreturn_func);
         }
-        ctx.builder.CreateCall(F,
-            literal_pointer_val(ctx, (jl_value_t*)jt));
+        ctx.builder.CreateCall(F, emit_sizeof(ctx, vinfo));
     }
 #endif
 
