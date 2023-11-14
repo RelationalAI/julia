@@ -125,7 +125,7 @@ JL_DLLEXPORT void jl_set_extra_allocs_rate(float rate)
 }
 
 #ifdef JL_DISPATCH_LOG_BOXES
-JL_DLLEXPORT void jl_log_box_input(size_t sz)
+JL_DLLEXPORT void jl_log_box_input(int32_t sz)
 {
     num_boxed_inputs++;
     boxed_inputs_size += sz;
@@ -155,7 +155,7 @@ JL_DLLEXPORT void jl_log_box_input(size_t sz)
         }
     }
 }
-JL_DLLEXPORT void jl_log_box_return(size_t sz)
+JL_DLLEXPORT void jl_log_box_return(int32_t sz)
 {
     num_boxed_returns++;
     boxed_returns_size += sz;
