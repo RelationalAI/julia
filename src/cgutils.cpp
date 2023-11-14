@@ -1132,7 +1132,7 @@ static Value *emit_sizeof(jl_codectx_t &ctx, const jl_cgval_t &p)
                     ConstantInt::get(getInt8Ty(ctx.builder.getContext()), 0));
             ctx.builder.CreateCondBr(isboxed, dynloadBB, postBB);
             ctx.builder.SetInsertPoint(dynloadBB);
-            Value *datatype = emit_typeof(p.V);
+            Value *datatype = emit_typeof(ctx, p.V, false);
             Value *dyn_size = emit_datatype_size(ctx, datatype);
             ctx.builder.CreateBr(postBB);
             dynloadBB = ctx.builder.GetInsertBlock(); // could have changed
