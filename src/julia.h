@@ -17,7 +17,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "options.h"
 #include "htable.h"
 #include "arraylist.h"
 #include "analyzer_annotations.h"
@@ -349,9 +348,7 @@ typedef struct _jl_method_t {
     // forcing the conclusion to always true.
     _jl_purity_overrides_t purity;
 
-#ifdef JL_DISPATCH_LOG_BOXES
     uint32_t num_dynamic_dispatches;
-#endif
 
 // hidden fields:
     // lock for modifications to the method
