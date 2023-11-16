@@ -349,12 +349,13 @@ typedef struct _jl_method_t {
     // forcing the conclusion to always true.
     _jl_purity_overrides_t purity;
 
-// hidden fields:
-    // lock for modifications to the method
-    jl_mutex_t writelock;
 #ifdef JL_DISPATCH_LOG_BOXES
     uint32_t num_dynamic_dispatches;
 #endif
+
+// hidden fields:
+    // lock for modifications to the method
+    jl_mutex_t writelock;
 } jl_method_t;
 
 // This type is a placeholder to cache data for a specType signature specialization of a Method
