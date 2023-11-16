@@ -97,13 +97,13 @@ JL_DLLEXPORT uint64_t jl_num_boxed_inputs()
 {
     return num_boxed_inputs;
 }
-JL_DLLEXPORT uint64_t jl_extra_num_boxed_inputs()
-{
-    return extra_num_boxed_inputs;
-}
 JL_DLLEXPORT uint64_t jl_boxed_inputs_size()
 {
     return boxed_inputs_size;
+}
+JL_DLLEXPORT uint64_t jl_extra_num_boxed_inputs()
+{
+    return extra_num_boxed_inputs;
 }
 JL_DLLEXPORT uint64_t jl_extra_boxed_inputs_size()
 {
