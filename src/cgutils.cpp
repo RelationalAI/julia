@@ -43,6 +43,22 @@ STATISTIC(EmittedWriteBarriers, "Number of write barriers emitted");
 STATISTIC(EmittedNewStructs, "Number of new structs emitted");
 STATISTIC(EmittedDeferSignal, "Number of deferred signals emitted");
 
+#ifdef JL_DISPATCH_LOG_BOXES
+static Value *emit_sizeof(jl_codectx_t &ctx, const jl_cgval_t &p);
+void logbox(jl_codectx_t &ctx, const jl_cgval_t &vinfo, jl_count_box_type log_reason)
+{
+    if (log_reason != JL_DONT_LOG_BOX) {
+        Function *F;
+        if (log_reason == JL_COUNT_BOX_INPUTS) {
+            F = prepare_call(jllogboxinput_func);
+        } else {
+            F = prepare_call(jllogboxreturn_func);
+        }
+        ctx.builder.CreateCall(F, emit_sizeof(ctx, vinfo));
+    }
+}
+#endif
+
 static Value *track_pjlvalue(jl_codectx_t &ctx, Value *V)
 {
     assert(V->getType() == ctx.types().T_pjlvalue);
@@ -3032,9 +3048,18 @@ static Value *load_i8box(jl_codectx_t &ctx, Value *v, jl_datatype_t *ty)
             (jl_value_t*)ty));
 }
 
+#ifdef JL_DISPATCH_LOG_BOXES
+static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t, jl_count_box_type log_reason=JL_DONT_LOG_BOX);
+#else
+static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t);
+#endif
 // some types have special boxing functions with small-value caches
 // Returns ctx.types().T_prjlvalue
+#ifdef JL_DISPATCH_LOG_BOXES
+static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t, jl_count_box_type log_reason)
+#else
 static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t)
+#endif
 {
     jl_value_t *jt = vinfo.typ;
     if (jt == (jl_value_t*)jl_bool_type)
@@ -3090,6 +3115,11 @@ static Value *_boxed_special(jl_codectx_t &ctx, const jl_cgval_t &vinfo, Type *t
         assert(jb->instance != NULL);
         return track_pjlvalue(ctx, literal_pointer_val(ctx, jb->instance));
     }
+#ifdef JL_DISPATCH_LOG_BOXES
+    if (log_reason != JL_DONT_LOG_BOX && box && jb != jl_int8_type) {
+        logbox(ctx, vinfo, log_reason);
+    }
+#endif
     return box;
 }
 
@@ -3163,6 +3193,11 @@ static AllocaInst *try_emit_union_alloca(jl_codectx_t &ctx, jl_uniontype_t *ut, 
     return NULL;
 }
 
+#ifdef JL_DISPATCH_LOG_BOXES
+static Value *box_union(jl_codectx_t &ctx, const jl_cgval_t &vinfo, const SmallBitVector &skip, jl_count_box_type log_reason=JL_DONT_LOG_BOX);
+#else
+static Value *box_union(jl_codectx_t &ctx, const jl_cgval_t &vinfo, const SmallBitVector &skip);
+#endif
 /*
  * Box unboxed values in a union. Optionally, skip certain unboxed values,
  * returning `Constant::getNullValue(ctx.types().T_pjlvalue)` in one of the skipped cases. If `skip` is not empty,
@@ -3171,7 +3206,11 @@ static AllocaInst *try_emit_union_alloca(jl_codectx_t &ctx, jl_uniontype_t *ut, 
  * `vinfo` is already an unknown boxed union (union tag 0x80).
  */
 // Returns ctx.types().T_prjlvalue
+#ifdef JL_DISPATCH_LOG_BOXES
+static Value *box_union(jl_codectx_t &ctx, const jl_cgval_t &vinfo, const SmallBitVector &skip, jl_count_box_type log_reason)
+#else
 static Value *box_union(jl_codectx_t &ctx, const jl_cgval_t &vinfo, const SmallBitVector &skip)
+#endif
 {
     // given vinfo::Union{T, S}, emit IR of the form:
     //   ...
@@ -3209,10 +3248,19 @@ static Value *box_union(jl_codectx_t &ctx, const jl_cgval_t &vinfo, const SmallB
                 }
                 else {
                     jl_cgval_t vinfo_r = jl_cgval_t(vinfo, (jl_value_t*)jt, NULL);
+#ifdef JL_DISPATCH_LOG_BOXES
+                    box = _boxed_special(ctx, vinfo_r, t, log_reason);
+#else
                     box = _boxed_special(ctx, vinfo_r, t);
+#endif
                     if (!box) {
                         box = emit_allocobj(ctx, jl_datatype_size(jt), literal_pointer_val(ctx, (jl_value_t*)jt));
                         init_bits_cgval(ctx, box, vinfo_r, jl_is_mutable(jt) ? ctx.tbaa().tbaa_mutab : ctx.tbaa().tbaa_immut);
+#ifdef JL_DISPATCH_LOG_BOXES
+                        if (log_reason != JL_DONT_LOG_BOX) {
+                            logbox(ctx, vinfo_r, log_reason);
+                        }
+#endif
                     }
                 }
                 tempBB = ctx.builder.GetInsertBlock(); // could have changed
@@ -3327,30 +3375,25 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
         return vinfo.V;
     }
 
-#ifdef JL_DISPATCH_LOG_BOXES
-    // TODO(kp): sometimes !jl_is_datatype(jt) -- why?
-    if (log_reason != JL_DONT_LOG_BOX) {
-        Function *F;
-        if (log_reason == JL_COUNT_BOX_INPUTS) {
-            F = prepare_call(jllogboxinput_func);
-        } else {
-            F = prepare_call(jllogboxreturn_func);
-        }
-        ctx.builder.CreateCall(F, emit_sizeof(ctx, vinfo));
-    }
-#endif
-
     Value *box;
     if (vinfo.TIndex) {
         SmallBitVector skip_none;
+#ifdef JL_DISPATCH_LOG_BOXES
+        box = box_union(ctx, vinfo, skip_none, log_reason);
+#else
         box = box_union(ctx, vinfo, skip_none);
+#endif
     }
     else {
         assert(vinfo.V && "Missing data for unboxed value.");
         assert(jl_is_concrete_immutable(jt) && "This type shouldn't have been unboxed.");
         Type *t = julia_type_to_llvm(ctx, jt);
         assert(!type_is_ghost(t)); // ghost values should have been handled by vinfo.constant above!
+#ifdef JL_DISPATCH_LOG_BOXES
+        box = _boxed_special(ctx, vinfo, t, log_reason);
+#else
         box = _boxed_special(ctx, vinfo, t);
+#endif
         if (!box) {
             bool do_promote = vinfo.promotion_point;
             if (do_promote && is_promotable) {
@@ -3373,6 +3416,11 @@ static Value *boxed(jl_codectx_t &ctx, const jl_cgval_t &vinfo, bool is_promotab
                 box = emit_allocobj(ctx, jl_datatype_size(jt), literal_pointer_val(ctx, (jl_value_t*)jt));
                 init_bits_cgval(ctx, box, vinfo, jl_is_mutable(jt) ? ctx.tbaa().tbaa_mutab : ctx.tbaa().tbaa_immut);
             }
+#ifdef JL_DISPATCH_LOG_BOXES
+            if (log_reason != JL_DONT_LOG_BOX) {
+                logbox(ctx, vinfo, log_reason);
+            }
+#endif
         }
     }
     return box;
