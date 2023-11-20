@@ -128,6 +128,14 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
 #endif
     jl_gc_pagemeta_t *meta = NULL;
 
+    // try to get page from `pool_lazily_freed`
+    meta = pop_lf_back(&global_page_pool_lazily_freed);
+    if (meta != NULL) {
+        gc_alloc_map_set(meta->data, GC_PAGE_ALLOCATED);
+        // page is already mapped
+        return meta;
+    }
+
     // try to get page from `pool_clean`
     meta = pop_lf_back(&global_page_pool_clean);
     if (meta != NULL) {
