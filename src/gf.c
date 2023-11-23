@@ -2933,14 +2933,19 @@ have_entry:
 JL_DLLEXPORT jl_value_t *jl_apply_generic(jl_value_t *F, jl_value_t **args, uint32_t nargs)
 {
     size_t world = jl_current_task->world_age;
+#ifdef JL_DISPATCH_LOG_BOXES
+    uint64_t t0 = jl_hrtime();
+#endif
     jl_method_instance_t *mfunc = jl_lookup_generic_(F, args, nargs,
                                                      jl_int32hash_fast(jl_return_address()),
                                                      world);
     JL_GC_PROMISE_ROOTED(mfunc);
+
 #ifdef JL_DISPATCH_LOG_BOXES
     jl_method_t *def = mfunc->def.method;
     if (jl_is_method(def)) {
         def->num_dynamic_dispatches++;
+        def->dynamic_dispatch_ns += (jl_hrtime() - t0);
     }
 #endif
     return _jl_invoke(F, args, nargs, mfunc, world);
@@ -2951,8 +2956,17 @@ JL_DLLEXPORT uint64_t jl_get_num_dynamic_dispatches(jl_method_t *m)
 {
     return m->num_dynamic_dispatches;
 }
+JL_DLLEXPORT uint64_t jl_get_dynamic_dispatch_ns(jl_method_t *m)
+{
+    return m->dynamic_dispatch_ns;
+}
 #else
 JL_DLLEXPORT uint64_t jl_get_num_dynamic_dispatches(jl_method_t *m)
+{
+    jl_error("not logging");
+    return 0;
+}
+JL_DLLEXPORT uint64_t jl_get_dynamic_dispatch_ns(jl_method_t *m)
 {
     jl_error("not logging");
     return 0;

@@ -807,6 +807,7 @@ JL_DLLEXPORT jl_method_t *jl_new_method_uninit(jl_module_t *module)
     m->constprop = 0;
 #ifdef JL_DISPATCH_LOG_BOXES
     m->num_dynamic_dispatches = 0;
+    m->dynamic_dispatch_ns = 0;
 #endif
     JL_MUTEX_INIT(&m->writelock);
     return m;

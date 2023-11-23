@@ -349,6 +349,7 @@ typedef struct _jl_method_t {
     _jl_purity_overrides_t purity;
 
     uint32_t num_dynamic_dispatches;
+    uint64_t dynamic_dispatch_ns;
 
 // hidden fields:
     // lock for modifications to the method
