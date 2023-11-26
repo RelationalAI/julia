@@ -2952,21 +2952,21 @@ JL_DLLEXPORT jl_value_t *jl_apply_generic(jl_value_t *F, jl_value_t **args, uint
 }
 
 #ifdef JL_DISPATCH_LOG_BOXES
-JL_DLLEXPORT uint64_t jl_get_num_dynamic_dispatches(jl_method_t *m)
+JL_DLLEXPORT int32_t jl_get_num_dynamic_dispatches(jl_method_t *m)
 {
     return m->num_dynamic_dispatches;
 }
-JL_DLLEXPORT uint64_t jl_get_dynamic_dispatch_ns(jl_method_t *m)
+JL_DLLEXPORT int64_t jl_get_dynamic_dispatch_ns(jl_method_t *m)
 {
     return m->dynamic_dispatch_ns;
 }
 #else
-JL_DLLEXPORT uint64_t jl_get_num_dynamic_dispatches(jl_method_t *m)
+JL_DLLEXPORT int32_t jl_get_num_dynamic_dispatches(jl_method_t *m)
 {
     jl_error("not logging");
     return 0;
 }
-JL_DLLEXPORT uint64_t jl_get_dynamic_dispatch_ns(jl_method_t *m)
+JL_DLLEXPORT int64_t jl_get_dynamic_dispatch_ns(jl_method_t *m)
 {
     jl_error("not logging");
     return 0;
