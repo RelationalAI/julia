@@ -1755,12 +1755,15 @@ static void gc_sweep_pool(void)
     }
 
     // the actual sweeping
+    int64_t t0 = jl_hrtime();
     jl_gc_page_stack_t *tmp = (jl_gc_page_stack_t *)alloca(n_threads * sizeof(jl_gc_page_stack_t));
     memset(tmp, 0, n_threads * sizeof(jl_gc_page_stack_t));
     jl_atomic_store(&gc_allocd_scratch, tmp);
     gc_sweep_wake_all();
     gc_sweep_pool_parallel();
     gc_sweep_wait_for_all();
+    int64_t t1 = jl_hrtime();
+    gc_num.total_sweep_page_scan_time += t1 - t0;
 
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
@@ -1773,6 +1776,7 @@ static void gc_sweep_pool(void)
         }
     }
 
+    int64_t t2 = jl_hrtime();
     // merge free lists
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
@@ -1792,6 +1796,8 @@ static void gc_sweep_pool(void)
             pg = pg2;
         }
     }
+    int64_t t3 = jl_hrtime();
+    gc_num.total_sweep_merge_freelists_time += t3 - t2;
 
     // null out terminal pointers of free lists
     for (int t_i = 0; t_i < n_threads; t_i++) {
@@ -1803,7 +1809,10 @@ static void gc_sweep_pool(void)
         }
     }
 
+    int64_t t4 = jl_hrtime();
     gc_free_pages();
+    int64_t t5 = jl_hrtime();
+    gc_num.total_sweep_madvise_time += t5 - t4;
     gc_dump_page_utilization_data();
     gc_time_pool_end(current_sweep_full);
 }

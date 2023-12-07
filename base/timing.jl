@@ -21,12 +21,15 @@ struct GC_Num
     time_to_safepoint           ::Int64
     max_time_to_safepoint       ::Int64
     total_time_to_safepoint     ::Int64
-    sweep_time      ::Int64
-    mark_time       ::Int64
-    total_sweep_time  ::Int64
-    total_mark_time   ::Int64
-    last_full_sweep ::Int64
-    last_incremental_sweep ::Int64
+    sweep_time                  ::Int64
+    mark_time                   ::Int64
+    total_sweep_time            ::Int64
+    total_sweep_madvise_time          ::Int64
+    total_sweep_page_scan_time        ::Int64
+    total_sweep_merge_freelists_time  ::Int64
+    total_mark_time             ::Int64
+    last_full_sweep             ::Int64
+    last_incremental_sweep      ::Int64
 end
 
 gc_num() = ccall(:jl_gc_num, GC_Num, ())
