@@ -678,6 +678,8 @@ static void rr_detach_teleport(void) {
 }
 #endif
 
+void gc_enable_heap_dump(void);
+
 JL_DLLEXPORT int jl_repl_entrypoint(int argc, char *argv[])
 {
     // no-op on Windows, note that the caller must have already converted

@@ -1459,6 +1459,19 @@ JL_DLLEXPORT jl_value_t *jl_gc_pool_alloc(jl_ptls_t ptls, int pool_offset,
 JL_DLLEXPORT jl_value_t *jl_gc_pool_alloc_instrumented(jl_ptls_t ptls, int pool_offset,
                                         int osize, jl_value_t* type)
 {
+    jl_datatype_t *ty = (jl_datatype_t*)type;
+    if (ty == jl_simplevector_type) {
+        pool_offset += JL_GC_N_MAX_POOLS;
+    }
+    else if (ty == jl_code_instance_type) {
+        pool_offset = 2 * JL_GC_N_MAX_POOLS;
+    }
+    else if (ty == jl_method_instance_type) {
+        pool_offset = 2 * JL_GC_N_MAX_POOLS + 1;
+    }
+    else if (ty == jl_typemap_entry_type) {
+        pool_offset = 2 * JL_GC_N_MAX_POOLS + 2;
+    }
     jl_value_t *val = jl_gc_pool_alloc_inner(ptls, pool_offset, osize);
     maybe_record_alloc_to_profile(val, osize, (jl_datatype_t*)type);
     return val;
@@ -1488,25 +1501,25 @@ JL_DLLEXPORT double jl_gc_page_utilization_stats[JL_GC_N_MAX_POOLS];
 
 STATIC_INLINE void gc_update_page_fragmentation_data(jl_gc_pagemeta_t *pg) JL_NOTSAFEPOINT
 {
-    gc_fragmentation_stat_t *stats = &gc_page_fragmentation_stats[pg->pool_n];
-    jl_atomic_fetch_add(&stats->n_freed_objs, pg->nfree);
-    jl_atomic_fetch_add(&stats->n_pages_allocd, 1);
+    // gc_fragmentation_stat_t *stats = &gc_page_fragmentation_stats[pg->pool_n];
+    // jl_atomic_fetch_add(&stats->n_freed_objs, pg->nfree);
+    // jl_atomic_fetch_add(&stats->n_pages_allocd, 1);
 }
 
 STATIC_INLINE void gc_dump_page_utilization_data(void) JL_NOTSAFEPOINT
 {
-    for (int i = 0; i < JL_GC_N_POOLS; i++) {
-        gc_fragmentation_stat_t *stats = &gc_page_fragmentation_stats[i];
-        double utilization = 1.0;
-        size_t n_freed_objs = jl_atomic_load_relaxed(&stats->n_freed_objs);
-        size_t n_pages_allocd = jl_atomic_load_relaxed(&stats->n_pages_allocd);
-        if (n_pages_allocd != 0) {
-            utilization -= ((double)n_freed_objs * (double)jl_gc_sizeclasses[i]) / (double)n_pages_allocd / (double)GC_PAGE_SZ;
-        }
-        jl_gc_page_utilization_stats[i] = utilization;
-        jl_atomic_store_relaxed(&stats->n_freed_objs, 0);
-        jl_atomic_store_relaxed(&stats->n_pages_allocd, 0);
-    }
+    // for (int i = 0; i < JL_GC_N_POOLS; i++) {
+    //     gc_fragmentation_stat_t *stats = &gc_page_fragmentation_stats[i];
+    //     double utilization = 1.0;
+    //     size_t n_freed_objs = jl_atomic_load_relaxed(&stats->n_freed_objs);
+    //     size_t n_pages_allocd = jl_atomic_load_relaxed(&stats->n_pages_allocd);
+    //     if (n_pages_allocd != 0) {
+    //         utilization -= ((double)n_freed_objs * (double)jl_gc_sizeclasses[i]) / (double)n_pages_allocd / (double)GC_PAGE_SZ;
+    //     }
+    //     jl_gc_page_utilization_stats[i] = utilization;
+    //     jl_atomic_store_relaxed(&stats->n_freed_objs, 0);
+    //     jl_atomic_store_relaxed(&stats->n_pages_allocd, 0);
+    // }
 }
 
 int heap_dump_enabled;
@@ -1765,6 +1778,7 @@ void gc_free_pages(void)
 // setup the data-structures for a sweep over all memory pools
 static void gc_sweep_pool(void)
 {
+    // jl_safe_printf("GC sweep pools...\n");
     gc_time_pool_start();
     buffered_pages = 0;
 
@@ -1774,20 +1788,21 @@ static void gc_sweep_pool(void)
 
     // allocate enough space to hold the end of the free list chain
     // for every thread and pool size
-    jl_taggedvalue_t ***pfl = (jl_taggedvalue_t ***) alloca(n_threads * JL_GC_N_POOLS * sizeof(jl_taggedvalue_t**));
+    const int jl_gc_n_tot_pools = 2 * JL_GC_N_MAX_POOLS + 3;
+    jl_taggedvalue_t ***pfl = (jl_taggedvalue_t ***) alloca(n_threads * jl_gc_n_tot_pools * sizeof(jl_taggedvalue_t**));
 
     // update metadata of pages that were pointed to by freelist or newpages from a pool
     // i.e. pages being the current allocation target
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 == NULL) {
-            for (int i = 0; i < JL_GC_N_POOLS; i++) {
-                pfl[t_i * JL_GC_N_POOLS + i] = NULL;
+            for (int i = 0; i < jl_gc_n_tot_pools; i++) {
+                pfl[t_i * jl_gc_n_tot_pools + i] = NULL;
             }
             continue;
         }
         jl_atomic_store_relaxed(&ptls2->gc_num.pool_live_bytes, 0);
-        for (int i = 0; i < JL_GC_N_POOLS; i++) {
+        for (int i = 0; i < jl_gc_n_tot_pools; i++) {
             jl_gc_pool_t *p = &ptls2->heap.norm_pools[i];
             jl_taggedvalue_t *last = p->freelist;
             if (last != NULL) {
@@ -1796,7 +1811,7 @@ static void gc_sweep_pool(void)
                 pg->has_young = 1;
             }
             p->freelist =  NULL;
-            pfl[t_i * JL_GC_N_POOLS + i] = &p->freelist;
+            pfl[t_i * jl_gc_n_tot_pools + i] = &p->freelist;
 
             last = p->newpages;
             if (last != NULL) {
@@ -1816,6 +1831,7 @@ static void gc_sweep_pool(void)
     }
 
     // the actual sweeping
+    // jl_safe_printf("GC sweep pages... the actual sweeping\n");
     jl_gc_page_stack_t *tmp = (jl_gc_page_stack_t *)alloca(n_threads * sizeof(jl_gc_page_stack_t));
     memset(tmp, 0, n_threads * sizeof(jl_gc_page_stack_t));
     jl_atomic_store(&gc_allocd_scratch, tmp);
@@ -1827,7 +1843,7 @@ static void gc_sweep_pool(void)
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 != NULL) {
             ptls2->page_metadata_allocd = tmp[t_i];
-            for (int i = 0; i < JL_GC_N_POOLS; i++) {
+            for (int i = 0; i < jl_gc_n_tot_pools; i++) {
                 jl_gc_pool_t *p = &ptls2->heap.norm_pools[i];
                 p->newpages = NULL;
             }
@@ -1835,6 +1851,7 @@ static void gc_sweep_pool(void)
     }
 
     // merge free lists
+    // jl_safe_printf("GC sweep pages... merge free lists\n");
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 == NULL) {
@@ -1847,19 +1864,20 @@ static void gc_sweep_pool(void)
                 char *cur_pg = pg->data;
                 jl_taggedvalue_t *fl_beg = (jl_taggedvalue_t*)(cur_pg + pg->fl_begin_offset);
                 jl_taggedvalue_t *fl_end = (jl_taggedvalue_t*)(cur_pg + pg->fl_end_offset);
-                *pfl[t_i * JL_GC_N_POOLS + pg->pool_n] = fl_beg;
-                pfl[t_i * JL_GC_N_POOLS + pg->pool_n] = &fl_end->next;
+                *pfl[t_i * jl_gc_n_tot_pools + pg->pool_n] = fl_beg;
+                pfl[t_i * jl_gc_n_tot_pools + pg->pool_n] = &fl_end->next;
             }
             pg = pg2;
         }
     }
 
     // null out terminal pointers of free lists
+    // jl_safe_printf("GC sweep pages... null out terminal pointers of free lists\n");
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 != NULL) {
-            for (int i = 0; i < JL_GC_N_POOLS; i++) {
-                *pfl[t_i * JL_GC_N_POOLS + i] = NULL;
+            for (int i = 0; i < jl_gc_n_tot_pools; i++) {
+                *pfl[t_i * jl_gc_n_tot_pools + i] = NULL;
             }
         }
     }
@@ -3846,11 +3864,39 @@ void jl_init_thread_heap(jl_ptls_t ptls)
 {
     jl_thread_heap_t *heap = &ptls->heap;
     jl_gc_pool_t *p = heap->norm_pools;
+    // initialize pools for objects which are not special cased
     for (int i = 0; i < JL_GC_N_POOLS; i++) {
         p[i].osize = jl_gc_sizeclasses[i];
         p[i].freelist = NULL;
         p[i].newpages = NULL;
     }
+    // initialize pools for SimpleVector
+    for (int i = 0; i < JL_GC_N_POOLS; i++) {
+        p[i + JL_GC_N_MAX_POOLS].osize = jl_gc_sizeclasses[i];
+        p[i + JL_GC_N_MAX_POOLS].freelist = NULL;
+        p[i + JL_GC_N_MAX_POOLS].newpages = NULL;
+    }
+    // // initialize pool for CodeInstance
+    size_t ci_size = sizeof(jl_code_instance_t) + sizeof(jl_taggedvalue_t);
+    size_t sz = jl_gc_sizeclasses[jl_gc_szclass(ci_size)];
+    int i = 2 * JL_GC_N_MAX_POOLS;
+    p[i].osize = sz;
+    p[i].freelist = NULL;
+    p[i].newpages = NULL;
+    // initialize pool for MethodInstance
+    size_t mi_size = sizeof(jl_method_instance_t) + sizeof(jl_taggedvalue_t);
+    sz = jl_gc_sizeclasses[jl_gc_szclass(mi_size)];
+    i = 2 * JL_GC_N_MAX_POOLS + 1;
+    p[i].osize = sz;
+    p[i].freelist = NULL;
+    p[i].newpages = NULL;
+    // initialize pool for TypeMapEntry
+    size_t tme_size = sizeof(jl_typemap_entry_t) + sizeof(jl_taggedvalue_t);
+    sz = jl_gc_sizeclasses[jl_gc_szclass(tme_size)];
+    i = 2 * JL_GC_N_MAX_POOLS + 2;
+    p[i].osize = sz;
+    p[i].freelist = NULL;
+    p[i].newpages = NULL;
     small_arraylist_new(&heap->weak_refs, 0);
     small_arraylist_new(&heap->live_tasks, 0);
     for (int i = 0; i < JL_N_STACK_POOLS; i++)
