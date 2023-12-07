@@ -6,6 +6,7 @@
 #ifdef __GLIBC__
 #include <malloc.h> // for malloc_trim
 #endif
+#include <unistd.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,6 +27,8 @@ uv_mutex_t gc_threads_lock;
 uv_cond_t gc_threads_cond;
 // Mutex used to coordinate entry of GC threads in the mark loop
 uv_mutex_t gc_queue_observer_lock;
+// For page profiling
+FILE *page_profiling_file;
 
 // Linked list of callback functions
 
@@ -1506,6 +1509,47 @@ STATIC_INLINE void gc_dump_page_utilization_data(void) JL_NOTSAFEPOINT
     }
 }
 
+int heap_dump_enabled;
+
+void gc_enable_heap_dump(void)
+{
+    heap_dump_enabled = 1;
+}
+
+void gc_disable_heap_dump(void)
+{
+    heap_dump_enabled = 0;
+}
+
+static void gc_heap_dump_write_preamble(char *data, int osize) JL_NOTSAFEPOINT
+{
+    if (heap_dump_enabled) {
+        fprintf(page_profiling_file, "{%p,%d}\n", data, osize);
+    }
+}
+
+static void gc_heap_dump_write_empty_page(void) JL_NOTSAFEPOINT
+{
+    if (heap_dump_enabled) {
+        fprintf(page_profiling_file, "[empty]\n");
+    }
+}
+
+static void gc_heap_dump_write_garbage(void) JL_NOTSAFEPOINT
+{
+    if (heap_dump_enabled) {
+        fprintf(page_profiling_file, "[garbage]\n");
+    }
+}
+
+static void gc_heap_dump_write_live_obj(jl_taggedvalue_t *v) JL_NOTSAFEPOINT
+{
+    if (heap_dump_enabled) {
+        const char *name = jl_typeof_str(jl_valueof(v));
+        fprintf(page_profiling_file, "[%s]\n", name);
+    }
+}
+
 int64_t buffered_pages = 0;
 
 // Returns pointer to terminal pointer of list rooted at *pfl.
@@ -1521,6 +1565,7 @@ static void gc_sweep_page(jl_gc_pool_t *p, jl_gc_page_stack_t *allocd, jl_gc_pag
     }
     size_t old_nfree = pg->nfree;
     size_t nfree;
+    gc_heap_dump_write_preamble(data, osize);
 
     int re_use_page = 1;
     int keep_as_local_buffer = 0;
@@ -1538,6 +1583,7 @@ static void gc_sweep_page(jl_gc_pool_t *p, jl_gc_page_stack_t *allocd, jl_gc_pag
             keep_as_local_buffer = 1;
         }
         nfree = (GC_PAGE_SZ - GC_PAGE_OFFSET) / osize;
+        gc_heap_dump_write_empty_page();
         goto done;
     }
     // For quick sweep, we might be able to skip the page if the page doesn't
@@ -1547,6 +1593,7 @@ static void gc_sweep_page(jl_gc_pool_t *p, jl_gc_page_stack_t *allocd, jl_gc_pag
         if (!prev_sweep_full || pg->prev_nold == pg->nold) {
             freedall = 0;
             nfree = pg->nfree;
+            gc_heap_dump_write_empty_page();
             goto done;
         }
     }
@@ -1564,12 +1611,14 @@ static void gc_sweep_page(jl_gc_pool_t *p, jl_gc_page_stack_t *allocd, jl_gc_pag
             int bits = v->bits.gc;
             // if an object is past `lim_newpages` then we can guarantee it's garbage
             if (!gc_marked(bits) || (char*)v >= lim_newpages) {
+                gc_heap_dump_write_garbage();
                 *pfl = v;
                 pfl = &v->next;
                 pfl_begin = (pfl_begin != NULL) ? pfl_begin : pfl;
                 pg_nfree++;
             }
             else { // marked young or old
+                gc_heap_dump_write_live_obj(v);
                 if (current_sweep_full || bits == GC_MARKED) { // old enough
                     bits = v->bits.gc = GC_OLD; // promote
                 }
@@ -3752,6 +3801,26 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     SetLastError(last_error);
 #endif
     errno = last_errno;
+}
+
+JL_DLLEXPORT char *jl_gc_heap_dump(void)
+{
+    gc_enable_heap_dump();
+    // create a file for page profiling
+    int64_t t0 = jl_hrtime();
+    pid_t pid = getpid();
+    char *name = calloc_s(512 * sizeof(char));
+    snprintf(name, 512, "/tmp/julia-%d-pageprof.%lld.out", pid, t0);
+    page_profiling_file = fopen(name, "w");
+    if (page_profiling_file == NULL) {
+        fprintf(stderr, "could not open \"%s\" for writing\n", name);
+        abort();
+    }
+    jl_gc_collect(JL_GC_FULL);
+    fclose(page_profiling_file);
+    page_profiling_file = NULL;
+    gc_disable_heap_dump();
+    return name;
 }
 
 void gc_mark_queue_all_roots(jl_ptls_t ptls, jl_gc_markqueue_t *mq)
