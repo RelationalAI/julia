@@ -1296,6 +1296,10 @@ static NOINLINE jl_taggedvalue_t *gc_add_page(jl_gc_pool_t *p) JL_NOTSAFEPOINT
 STATIC_INLINE jl_value_t *jl_gc_pool_alloc_inner(jl_ptls_t ptls, int pool_offset,
                                           int osize)
 {
+    // Allocate on special pool if compiler is running
+    if (__unlikely(ptls->codegen_count > 0)) {
+        pool_offset += sizeof(jl_gc_pool_t) * JL_GC_N_MAX_POOLS;
+    }
     // Use the pool offset instead of the pool address as the argument
     // to workaround a llvm bug.
     // Ref https://llvm.org/bugs/show_bug.cgi?id=27190
@@ -1386,10 +1390,8 @@ int jl_gc_classify_pools(size_t sz, int *osize)
 
 // sweep phase
 
-gc_fragmentation_stat_t gc_page_fragmentation_stats[JL_GC_N_POOLS];
+gc_fragmentation_stat_t gc_page_fragmentation_stats[2 * JL_GC_N_MAX_POOLS];
 JL_DLLEXPORT double jl_gc_page_utilization_stats[JL_GC_N_MAX_POOLS];
-
-extern gc_fragmentation_stat_t gc_page_fragmentation_stats[JL_GC_N_POOLS];
 
 STATIC_INLINE void gc_update_page_fragmentation_data(jl_gc_pagemeta_t *pg) JL_NOTSAFEPOINT
 {
@@ -1401,16 +1403,19 @@ STATIC_INLINE void gc_update_page_fragmentation_data(jl_gc_pagemeta_t *pg) JL_NO
 STATIC_INLINE void gc_dump_page_utilization_data(void) JL_NOTSAFEPOINT
 {
     for (int i = 0; i < JL_GC_N_POOLS; i++) {
-        gc_fragmentation_stat_t *stats = &gc_page_fragmentation_stats[i];
+        gc_fragmentation_stat_t *stats1 = &gc_page_fragmentation_stats[i];
+        gc_fragmentation_stat_t *stats2 = &gc_page_fragmentation_stats[i + JL_GC_N_MAX_POOLS];
         double utilization = 1.0;
-        size_t n_freed_objs = jl_atomic_load_relaxed(&stats->n_freed_objs);
-        size_t n_pages_allocd = jl_atomic_load_relaxed(&stats->n_pages_allocd);
+        size_t n_freed_objs = jl_atomic_load_relaxed(&stats1->n_freed_objs) + jl_atomic_load_relaxed(&stats2->n_freed_objs);
+        size_t n_pages_allocd = jl_atomic_load_relaxed(&stats1->n_pages_allocd) + jl_atomic_load_relaxed(&stats2->n_pages_allocd);
         if (n_pages_allocd != 0) {
             utilization -= ((double)n_freed_objs * (double)jl_gc_sizeclasses[i]) / (double)n_pages_allocd / (double)GC_PAGE_SZ;
         }
         jl_gc_page_utilization_stats[i] = utilization;
-        jl_atomic_store_relaxed(&stats->n_freed_objs, 0);
-        jl_atomic_store_relaxed(&stats->n_pages_allocd, 0);
+        jl_atomic_store_relaxed(&stats1->n_freed_objs, 0);
+        jl_atomic_store_relaxed(&stats1->n_pages_allocd, 0);
+        jl_atomic_store_relaxed(&stats2->n_freed_objs, 0);
+        jl_atomic_store_relaxed(&stats2->n_pages_allocd, 0);
     }
 }
 
@@ -1792,20 +1797,21 @@ static void gc_sweep_pool(void)
 
     // allocate enough space to hold the end of the free list chain
     // for every thread and pool size
-    jl_taggedvalue_t ***pfl = (jl_taggedvalue_t ***) malloc_s(n_threads * JL_GC_N_POOLS * sizeof(jl_taggedvalue_t**));
+    const int jl_gc_n_tot_pools = 2 * JL_GC_N_MAX_POOLS;
+    jl_taggedvalue_t ***pfl = (jl_taggedvalue_t ***) malloc_s(n_threads * jl_gc_n_tot_pools * sizeof(jl_taggedvalue_t**));
 
     // update metadata of pages that were pointed to by freelist or newpages from a pool
     // i.e. pages being the current allocation target
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 == NULL) {
-            for (int i = 0; i < JL_GC_N_POOLS; i++) {
-                pfl[t_i * JL_GC_N_POOLS + i] = NULL;
+            for (int i = 0; i < jl_gc_n_tot_pools; i++) {
+                pfl[t_i * jl_gc_n_tot_pools + i] = NULL;
             }
             continue;
         }
         jl_atomic_store_relaxed(&ptls2->gc_num.pool_live_bytes, 0);
-        for (int i = 0; i < JL_GC_N_POOLS; i++) {
+        for (int i = 0; i < jl_gc_n_tot_pools; i++) {
             jl_gc_pool_t *p = &ptls2->heap.norm_pools[i];
             jl_taggedvalue_t *last = p->freelist;
             if (last != NULL) {
@@ -1814,7 +1820,7 @@ static void gc_sweep_pool(void)
                 pg->has_young = 1;
             }
             p->freelist =  NULL;
-            pfl[t_i * JL_GC_N_POOLS + i] = &p->freelist;
+            pfl[t_i * jl_gc_n_tot_pools + i] = &p->freelist;
 
             last = p->newpages;
             if (last != NULL) {
@@ -1851,7 +1857,7 @@ static void gc_sweep_pool(void)
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 != NULL) {
             ptls2->page_metadata_allocd = new_gc_allocd_scratch[t_i].stack;
-            for (int i = 0; i < JL_GC_N_POOLS; i++) {
+            for (int i = 0; i < jl_gc_n_tot_pools; i++) {
                 jl_gc_pool_t *p = &ptls2->heap.norm_pools[i];
                 p->newpages = NULL;
             }
@@ -1871,8 +1877,8 @@ static void gc_sweep_pool(void)
                 char *cur_pg = pg->data;
                 jl_taggedvalue_t *fl_beg = (jl_taggedvalue_t*)(cur_pg + pg->fl_begin_offset);
                 jl_taggedvalue_t *fl_end = (jl_taggedvalue_t*)(cur_pg + pg->fl_end_offset);
-                *pfl[t_i * JL_GC_N_POOLS + pg->pool_n] = fl_beg;
-                pfl[t_i * JL_GC_N_POOLS + pg->pool_n] = &fl_end->next;
+                *pfl[t_i * jl_gc_n_tot_pools + pg->pool_n] = fl_beg;
+                pfl[t_i * jl_gc_n_tot_pools + pg->pool_n] = &fl_end->next;
             }
             pg = pg2;
         }
@@ -1882,8 +1888,8 @@ static void gc_sweep_pool(void)
     for (int t_i = 0; t_i < n_threads; t_i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[t_i];
         if (ptls2 != NULL) {
-            for (int i = 0; i < JL_GC_N_POOLS; i++) {
-                *pfl[t_i * JL_GC_N_POOLS + i] = NULL;
+            for (int i = 0; i < jl_gc_n_tot_pools; i++) {
+                *pfl[t_i * jl_gc_n_tot_pools + i] = NULL;
             }
         }
     }
@@ -3927,6 +3933,11 @@ void jl_init_thread_heap(jl_ptls_t ptls)
         p[i].osize = jl_gc_sizeclasses[i];
         p[i].freelist = NULL;
         p[i].newpages = NULL;
+    }
+    for (int i = 0; i < JL_GC_N_POOLS; i++) {
+        p[i + JL_GC_N_MAX_POOLS].osize = jl_gc_sizeclasses[i];
+        p[i + JL_GC_N_MAX_POOLS].freelist = NULL;
+        p[i + JL_GC_N_MAX_POOLS].newpages = NULL;
     }
     small_arraylist_new(&heap->weak_refs, 0);
     small_arraylist_new(&heap->live_tasks, 0);
