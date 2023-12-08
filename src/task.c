@@ -941,6 +941,7 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
     t->reentrant_timing = 0;
     t->reentrant_inference = 0;
     t->inference_start_time = 0;
+    t->long_lived_alloc_count = 0;
 
 #ifdef COPY_STACKS
     if (!t->copy_stack) {

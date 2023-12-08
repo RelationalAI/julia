@@ -211,4 +211,11 @@ function enable_logging(on::Bool=true)
     ccall(:jl_enable_gc_logging, Cvoid, (Cint,), on)
 end
 
+macro long_lived(expr)
+    ccall(:jl_gc_begin_long_lived_alloc, Cvoid, ())
+    obj = esc(expr)
+    ccall(:jl_gc_end_long_lived_alloc, Cvoid, ())
+    return obj
+end
+
 end # module GC

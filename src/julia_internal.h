@@ -477,6 +477,9 @@ STATIC_INLINE uint8_t JL_CONST_FUNC jl_gc_szclass_align8(unsigned sz)
 #define GC_MAX_SZCLASS (2032-sizeof(void*))
 static_assert(ARRAY_CACHE_ALIGN_THRESHOLD > GC_MAX_SZCLASS, "");
 
+JL_DLLEXPORT void jl_gc_begin_long_lived_alloc(void) JL_NOTSAFEPOINT;
+JL_DLLEXPORT void jl_gc_end_long_lived_alloc(void) JL_NOTSAFEPOINT;
+
 STATIC_INLINE jl_value_t *jl_gc_alloc_(jl_ptls_t ptls, size_t sz, void *ty)
 {
     jl_value_t *v;

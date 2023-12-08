@@ -161,7 +161,7 @@ typedef struct {
 
     // variables for allocating objects from pools
 #define JL_GC_N_MAX_POOLS 51 // conservative. must be kept in sync with `src/julia_internal.h`
-    jl_gc_pool_t norm_pools[JL_GC_N_MAX_POOLS];
+    jl_gc_pool_t norm_pools[2 * JL_GC_N_MAX_POOLS];
 
 #define JL_N_STACK_POOLS 16
     small_arraylist_t free_stacks[JL_N_STACK_POOLS];
