@@ -11,11 +11,14 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <iostream>
+#include <set>
 
 using std::vector;
 using std::string;
 using std::ostringstream;
 using std::pair;
+using std::set;
 using std::make_pair;
 using llvm::StringMap;
 using llvm::DenseMap;
@@ -70,7 +73,7 @@ struct Node {
     size_t id; // This should be a globally-unique counter, but we use the memory address
     size_t self_size;
     size_t trace_node_id;  // This is ALWAYS 0 in Javascript heap-snapshots.
-    // whether the from_node is attached or dettached from the main application state
+    // whether the from_node is attached or detached from the main application state
     // https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/include/v8-profiler.h#L739-L745
     int detachedness;  // 0 - unknown, 1 - attached, 2 - detached
     vector<Edge> edges;
@@ -113,7 +116,6 @@ struct HeapSnapshot {
     StringTable node_types;
     StringTable edge_types;
     DenseMap<void *, size_t> node_ptr_to_index_map;
-
     size_t num_edges = 0; // For metadata, updated as you add each edge. Needed because edges owned by nodes.
 };
 
@@ -322,7 +324,7 @@ void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT
     auto &internal_root = g_snapshot->nodes.front();
     auto to_node_idx = g_snapshot->node_ptr_to_index_map[root];
     auto edge_label = g_snapshot->names.find_or_create_string_id(name);
-
+    std::cout << "record root edge: " << name << " for node idx: " << to_node_idx <<"\n";
     _record_gc_just_edge("internal", internal_root, to_node_idx, edge_label);
 }
 
@@ -468,6 +470,24 @@ void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx,
     g_snapshot->num_edges += 1;
 }
 
+template <typename T>
+std::string to_json(const std::set<T>& set) {
+  std::stringstream ss;
+  ss << "[";
+
+  bool first_element = true;
+  for (const auto& element : set) {
+    if (!first_element) {
+      ss << ",";
+    }
+    first_element = false;
+
+    ss << "\"" << element << "\"";
+  }
+  ss << "]";
+  return ss.str();
+}
+
 void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one)
 {
     // mimicking https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/src/profiler/heap-snapshot-generator.cc#L2567-L2567
@@ -489,10 +509,12 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
     ios_printf(stream, "},\n"); // end "snapshot"
 
     ios_printf(stream, "\"nodes\":[");
+    set<size_t> orphans;
     bool first_node = true;
     for (const auto &from_node : snapshot.nodes) {
         if (first_node) {
             first_node = false;
+            std::cout << "root node edges: " << from_node.edges.size() << "\n";
         }
         else {
             ios_printf(stream, ",");
@@ -506,11 +528,15 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
                             from_node.edges.size(),
                             from_node.trace_node_id,
                             from_node.detachedness);
+        void * ptr = (void*)from_node.id;
+        size_t n_id = snapshot.node_ptr_to_index_map[ptr];
+        orphans.insert(n_id);
     }
     ios_printf(stream, "],\n");
 
     ios_printf(stream, "\"edges\":[");
     bool first_edge = true;
+    set<size_t> removed_nodes;
     for (const auto &from_node : snapshot.nodes) {
         for (const auto &edge : from_node.edges) {
             if (first_edge) {
@@ -523,6 +549,18 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
                                 edge.type,
                                 edge.name_or_index,
                                 edge.to_node * k_node_number_of_fields);
+                                // edge.to_node);
+            auto n_id = edge.to_node;
+            auto it = orphans.find(n_id);
+            if (it != orphans.end()) {
+                removed_nodes.insert(n_id);
+                orphans.erase(it);
+            } else {
+                auto nit = removed_nodes.find(n_id);
+                if (nit == removed_nodes.end()) {
+                    std::cout << "edge to non-existent node: " << n_id << "\n";
+                }
+            }
         }
     }
     ios_printf(stream, "],\n"); // end "edges"
@@ -530,6 +568,11 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
     ios_printf(stream, "\"strings\":");
 
     snapshot.names.print_json_array(stream, true);
-
     ios_printf(stream, "}");
+
+    std::cout << "node count: " << snapshot.nodes.size() << "\n";
+    std::cout << "edge count: " << snapshot.num_edges << "\n";
+    std::cout << "count of nodes with parent(s): " << removed_nodes.size() << "\n";
+    std::cout << "orphan node count: " << orphans.size() << "\n";
+    std::cout << "orphan nodes: " << to_json(orphans) << "\n";
 }
