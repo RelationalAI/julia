@@ -92,6 +92,10 @@ struct StringTable {
         return val.first->second;
     }
 
+    std::string get(size_t id) JL_NOTSAFEPOINT {
+        return strings[id].str();
+    }
+
     void print_json_array(ios_t *stream, bool newlines) {
         ios_printf(stream, "[");
         bool first = true;
@@ -488,6 +492,10 @@ std::string to_json(const std::set<T>& set) {
   return ss.str();
 }
 
+std::string get_string(StringTable &table, size_t id) {
+    return table.get(id);
+}
+
 void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one)
 {
     // mimicking https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/src/profiler/heap-snapshot-generator.cc#L2567-L2567
@@ -575,4 +583,18 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
     std::cout << "count of nodes with parent(s): " << removed_nodes.size() << "\n";
     std::cout << "orphan node count: " << orphans.size() << "\n";
     std::cout << "orphan nodes: " << to_json(orphans) << "\n";
+    for (const auto &from_node : snapshot.nodes) {
+        void * ptr = (void*)from_node.id;
+        size_t n_id = snapshot.node_ptr_to_index_map[ptr];
+        if (orphans.find(n_id) != orphans.end()) {
+            std::cout << "orphan node: {type:" << get_string(snapshot.node_types, from_node.type)
+            << ", name:" << get_string(snapshot.names, from_node.name)
+            << ", id:" << n_id
+            << ", self_size:" << (all_one ? (size_t)1 : from_node.self_size)
+            << ", edge_count:" << from_node.edges.size()
+            << ", trace_node_id:" << from_node.trace_node_id
+            << ", detachedness:" << from_node.detachedness
+            << "}\n";
+        }
+    }
 }
