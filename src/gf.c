@@ -2204,6 +2204,7 @@ static void record_precompile_statement(jl_method_instance_t *mi)
 {
     static ios_t f_precompile;
     static JL_STREAM* s_precompile = NULL;
+    static time_t start_t = 0;
     jl_method_t *def = mi->def.method;
     if (jl_options.trace_compile == NULL)
         return;
@@ -2221,11 +2222,13 @@ static void record_precompile_statement(jl_method_instance_t *mi)
                 jl_errorf("cannot open precompile statement file \"%s\" for writing", t);
             s_precompile = (JL_STREAM*) &f_precompile;
         }
+        start_t = time(NULL);
     }
     if (!jl_has_free_typevars(mi->specTypes)) {
+        time_t up_t = time(NULL) - start_t;
         jl_printf(s_precompile, "precompile(");
         jl_static_show(s_precompile, mi->specTypes);
-        jl_printf(s_precompile, ")\n");
+        jl_printf(s_precompile, ") # %lds\n", up_t);
         if (s_precompile != JL_STDERR)
             ios_flush(&f_precompile);
     }
