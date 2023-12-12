@@ -587,9 +587,9 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
         void * ptr = (void*)from_node.id;
         size_t n_id = snapshot.node_ptr_to_index_map[ptr];
         if (orphans.find(n_id) != orphans.end()) {
-            std::cout << "orphan node: {type:" << get_string(snapshot.node_types, from_node.type)
-            << ", name:" << get_string(snapshot.names, from_node.name)
-            << ", id:" << n_id
+            std::cout << "orphan node: {type:(" << from_node.type << "," << get_string(snapshot.node_types, from_node.type) << ")"
+            << ", name:(" << from_node.name << "," << get_string(snapshot.names, from_node.name) << ")"
+            << ", id:(" << from_node.id << "," << n_id << ")"
             << ", self_size:" << (all_one ? (size_t)1 : from_node.self_size)
             << ", edge_count:" << from_node.edges.size()
             << ", trace_node_id:" << from_node.trace_node_id
