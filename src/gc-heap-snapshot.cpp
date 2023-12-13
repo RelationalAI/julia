@@ -250,7 +250,9 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
 
         name = StringRef((const char*)str_.buf, str_.size);
     }
-
+    if (g_snapshot->nodes.size() == 4) {
+        std::cout << "node for object: " <<  static_cast<void*>(a) << "\n";
+    }
     g_snapshot->nodes.push_back(Node{
         g_snapshot->node_types.find_or_create_string_id(node_type), // size_t type;
         g_snapshot->names.find_or_create_string_id(name), // size_t name;

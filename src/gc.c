@@ -10,6 +10,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include <stdio.h>
+
+int gc_print_count = 0;
+const int gc_print_limit = 400;
 
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
@@ -1932,6 +1936,9 @@ STATIC_INLINE void gc_mark_push_remset(jl_ptls_t ptls, jl_value_t *obj,
 // Push a work item to the queue
 STATIC_INLINE void gc_ptr_queue_push(jl_gc_markqueue_t *mq, jl_value_t *obj) JL_NOTSAFEPOINT
 {
+    if (gc_heap_snapshot_enabled && ++gc_print_count <= gc_print_limit) {
+        printf("gc_ptr_queue_push: %p\n", obj);
+    }
     ws_array_t *old_a = ws_queue_push(&mq->ptr_queue, &obj, sizeof(jl_value_t*));
     // Put `old_a` in `reclaim_set` to be freed after the mark phase
     if (__unlikely(old_a != NULL))
@@ -1943,6 +1950,9 @@ STATIC_INLINE jl_value_t *gc_ptr_queue_pop(jl_gc_markqueue_t *mq) JL_NOTSAFEPOIN
 {
     jl_value_t *v = NULL;
     ws_queue_pop(&mq->ptr_queue, &v, sizeof(jl_value_t*));
+    if (gc_heap_snapshot_enabled && ++gc_print_count <= gc_print_limit) {
+        printf("gc_ptr_queue_pop: %p\n", v);
+    }
     return v;
 }
 
@@ -1951,6 +1961,9 @@ STATIC_INLINE jl_value_t *gc_ptr_queue_steal_from(jl_gc_markqueue_t *mq2) JL_NOT
 {
     jl_value_t *v = NULL;
     ws_queue_steal_from(&mq2->ptr_queue, &v, sizeof(jl_value_t*));
+    if (gc_heap_snapshot_enabled && ++gc_print_count <= gc_print_limit) {
+        printf("gc_ptr_queue_steal_from: %p\n", v);
+    }
     return v;
 }
 
