@@ -50,7 +50,6 @@ static jl_gc_callback_list_t *gc_cblist_post_gc;
 static jl_gc_callback_list_t *gc_cblist_notify_external_alloc;
 static jl_gc_callback_list_t *gc_cblist_notify_external_free;
 static jl_gc_callback_list_t *gc_cblist_notify_gc_pressure;
-typedef void (*jl_gc_cb_notify_gc_pressure_t)(void);
 
 #define gc_invoke_callbacks(ty, list, args) \
     do { \
@@ -138,12 +137,12 @@ JL_DLLEXPORT void jl_gc_set_cb_notify_external_free(jl_gc_cb_notify_external_fre
 }
 
 JL_DLLEXPORT void jl_gc_set_cb_notify_gc_pressure(jl_gc_cb_notify_gc_pressure_t cb, int enable)
-{
-    if (enable)
-        jl_gc_register_callback(&gc_cblist_notify_gc_pressure, (jl_gc_cb_func_t)cb);
-    else
-        jl_gc_deregister_callback(&gc_cblist_notify_gc_pressure, (jl_gc_cb_func_t)cb);
-}
+ {
+     if (enable)
+         jl_gc_register_callback(&gc_cblist_notify_gc_pressure, (jl_gc_cb_func_t)cb);
+     else
+         jl_gc_deregister_callback(&gc_cblist_notify_gc_pressure, (jl_gc_cb_func_t)cb);
+ }
 
 // Protect all access to `finalizer_list_marked` and `to_finalize`.
 // For accessing `ptls->finalizers`, the lock is needed if a thread
@@ -676,6 +675,7 @@ static void gc_sweep_foreign_objs(void)
 }
 
 // GC knobs and self-measurement variables
+static int under_memory_pressure;
 static int64_t last_gc_total_bytes = 0;
 
 // max_total_memory is a suggestion.  We try very hard to stay
@@ -3488,6 +3488,7 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     // If the live data outgrows the suggested max_total_memory
     // we keep going with full gcs until we either free some space or get an OOM error.
     if (live_bytes > max_total_memory) {
+        under_memory_pressure = 1;
         sweep_full = 1;
     }
     if (gc_sweep_always_full) {
@@ -3695,10 +3696,12 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
 
     gc_invoke_callbacks(jl_gc_cb_post_gc_t,
         gc_cblist_post_gc, (collection));
-    if (under_pressure)
+
+    if (under_memory_pressure) {
         gc_invoke_callbacks(jl_gc_cb_notify_gc_pressure_t,
             gc_cblist_notify_gc_pressure, ());
-    under_pressure = 0;
+    }
+    under_memory_pressure = 0;
 #ifdef _OS_WINDOWS_
     SetLastError(last_error);
 #endif
