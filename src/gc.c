@@ -14,7 +14,7 @@ extern "C" {
 #include <stdbool.h>
 
 int gc_print_count = 0;
-const int gc_print_limit = 400;
+const int gc_print_limit = 1;
 
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
