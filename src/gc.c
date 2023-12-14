@@ -3065,13 +3065,17 @@ static void gc_queue_bt_buf(jl_gc_markqueue_t *mq, jl_ptls_t ptls2)
 {
     jl_bt_element_t *bt_data = ptls2->bt_data;
     size_t bt_size = ptls2->bt_size;
+    jl_value_t* root = (jl_value_t*)bt_data->jlvalue;
+    if (root != NULL)
+        gc_heap_snapshot_record_root(root, "backtrace_buffer");
     for (size_t i = 0; i < bt_size; i += jl_bt_entry_size(bt_data + i)) {
         jl_bt_element_t *bt_entry = bt_data + i;
         if (jl_bt_is_native(bt_entry))
             continue;
         size_t njlvals = jl_bt_num_jlvals(bt_entry);
         for (size_t j = 0; j < njlvals; j++)
-            gc_try_claim_and_push(mq, jl_bt_entry_jlvalue(bt_entry, j), NULL);
+            if (gc_try_claim_and_push(mq, jl_bt_entry_jlvalue(bt_entry, j), NULL) && root != NULL)
+                gc_heap_snapshot_record_frame_to_object_edge(root, jl_bt_entry_jlvalue(bt_entry, j));
     }
 }
 
@@ -3087,6 +3091,8 @@ static void gc_queue_remset(jl_ptls_t ptls, jl_ptls_t ptls2)
     int n_bnd_refyoung = 0;
     len = ptls2->heap.rem_bindings.len;
     items = ptls2->heap.rem_bindings.items;
+//    jl_value_t* root = (jl_value_t*)(&ptls2->heap.rem_bindings);
+//    gc_heap_snapshot_record_root(root, "rem_binding");
     for (size_t i = 0; i < len; i++) {
         jl_binding_t *ptr = (jl_binding_t*)items[i];
         uintptr_t bnd_refyoung = 0;
@@ -3096,6 +3102,7 @@ static void gc_queue_remset(jl_ptls_t ptls, jl_ptls_t ptls2)
         gc_try_claim_and_push(&ptls->mark_queue, ty, &bnd_refyoung);
         jl_value_t *globalref = jl_atomic_load_relaxed(&ptr->globalref);
         gc_try_claim_and_push(&ptls->mark_queue, globalref, &bnd_refyoung);
+//        gc_heap_snapshot_record_object_to_binding(root, ptr);
         if (bnd_refyoung) {
             items[n_bnd_refyoung] = ptr;
             n_bnd_refyoung++;

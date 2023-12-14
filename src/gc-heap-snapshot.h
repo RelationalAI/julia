@@ -20,7 +20,7 @@ void _gc_heap_snapshot_record_task_to_frame_edge(jl_task_t *from, void *to) JL_N
 void _gc_heap_snapshot_record_frame_to_frame_edge(jl_gcframe_t *from, jl_gcframe_t *to) JL_NOTSAFEPOINT;
 void _gc_heap_snapshot_record_array_edge(jl_value_t *from, jl_value_t *to, size_t index) JL_NOTSAFEPOINT;
 void _gc_heap_snapshot_record_object_edge(jl_value_t *from, jl_value_t *to, void* slot) JL_NOTSAFEPOINT;
-void _gc_heap_snapshot_record_module_to_binding(jl_module_t* module, jl_binding_t* binding) JL_NOTSAFEPOINT;
+void _gc_heap_snapshot_record_module_to_binding(jl_value_t* module, jl_binding_t* binding) JL_NOTSAFEPOINT;
 // Used for objects managed by GC, but which aren't exposed in the julia object, so have no
 // field or index.  i.e. they're not reachable from julia code, but we _will_ hit them in
 // the GC mark phase (so we can check their type tag to get the size).
@@ -82,7 +82,14 @@ static inline void gc_heap_snapshot_record_object_edge(jl_value_t *from, jl_valu
 static inline void gc_heap_snapshot_record_module_to_binding(jl_module_t* module, jl_binding_t* binding) JL_NOTSAFEPOINT
 {
     if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
-        _gc_heap_snapshot_record_module_to_binding(module, binding);
+        _gc_heap_snapshot_record_module_to_binding((jl_value_t*)module, binding);
+    }
+}
+
+static inline void gc_heap_snapshot_record_object_to_binding(jl_value_t* object, jl_binding_t* binding) JL_NOTSAFEPOINT
+{
+    if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
+        _gc_heap_snapshot_record_module_to_binding(object, binding);
     }
 }
 

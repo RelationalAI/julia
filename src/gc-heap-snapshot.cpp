@@ -230,6 +230,15 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
         node_type = "jl_datatype_t";
         self_size = sizeof(jl_datatype_t);
     }
+    // else if (typeof(a) == arraylist_t) {
+    //     ios_need_close = 1;
+    //     ios_mem(&str_, 0);
+    //     JL_STREAM* str = (JL_STREAM*)&str_;
+    //     jl_static_show(str, (jl_value_t*)type);
+    //     name = StringRef((const char*)str_.buf, str_.size);
+    //     node_type = "jl_array_t";
+    //     self_size = (arraylist_t)a->len;
+    // }
     else if (jl_is_array(a)){
         ios_need_close = 1;
         ios_mem(&str_, 0);
@@ -400,9 +409,9 @@ void _gc_heap_snapshot_record_object_edge(jl_value_t *from, jl_value_t *to, void
                     g_snapshot->names.find_or_create_string_id(path));
 }
 
-void _gc_heap_snapshot_record_module_to_binding(jl_module_t* module, jl_binding_t* binding) JL_NOTSAFEPOINT
+void _gc_heap_snapshot_record_module_to_binding(jl_value_t* module, jl_binding_t* binding) JL_NOTSAFEPOINT
 {
-    auto from_node_idx = record_node_to_gc_snapshot((jl_value_t*)module);
+    auto from_node_idx = record_node_to_gc_snapshot(module);
     auto to_node_idx = record_pointer_to_gc_snapshot(binding, sizeof(jl_binding_t), jl_symbol_name(binding->name));
 
     jl_value_t *value = jl_atomic_load_relaxed(&binding->value);
