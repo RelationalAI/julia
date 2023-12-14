@@ -9,6 +9,8 @@
 #ifndef JL_GC_H
 #define JL_GC_H
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -276,6 +278,13 @@ typedef struct {
     pagetable1_t *meta1[REGION2_PG_COUNT];
 } pagetable_t;
 
+typedef struct {
+    _Atomic(size_t) bytes_mapped;
+    _Atomic(size_t) bytes_resident;
+    _Atomic(size_t) heap_size;
+    _Atomic(size_t) heap_target;
+} gc_heapstatus_t;
+
 #define GC_PAGE_UNMAPPED        0
 #define GC_PAGE_ALLOCATED       1
 #define GC_PAGE_LAZILY_FREED    2
@@ -393,6 +402,7 @@ extern int64_t buffered_pages;
 extern int gc_first_tid;
 extern int gc_n_threads;
 extern jl_ptls_t* gc_all_tls_states;
+extern gc_heapstatus_t gc_heap_stats;
 
 STATIC_INLINE bigval_t *bigval_header(jl_taggedvalue_t *o) JL_NOTSAFEPOINT
 {
@@ -515,6 +525,13 @@ void gc_time_summary(int sweep_full, uint64_t start, uint64_t end,
                      uint64_t freed, uint64_t live, uint64_t interval,
                      uint64_t pause, uint64_t ttsp, uint64_t mark,
                      uint64_t sweep);
+void gc_heuristics_summary(
+        uint64_t old_alloc_diff, uint64_t alloc_mem,
+        uint64_t old_mut_time, uint64_t alloc_time,
+        uint64_t old_freed_diff, uint64_t gc_mem,
+        uint64_t old_pause_time, uint64_t gc_time,
+        int thrash_counter, const char *reason,
+        uint64_t current_heap, uint64_t target_heap);
 #else
 #define gc_time_pool_start()
 STATIC_INLINE void gc_time_count_page(int freedall, int pg_skpd) JL_NOTSAFEPOINT
@@ -542,6 +559,13 @@ STATIC_INLINE void gc_time_count_mallocd_array(int bits) JL_NOTSAFEPOINT
                             estimate_freed, sweep_full)
 #define  gc_time_summary(sweep_full, start, end, freed, live,           \
                          interval, pause, ttsp, mark, sweep)
+#define gc_heuristics_summary( \
+        old_alloc_diff, alloc_mem, \
+        old_mut_time, alloc_time, \
+        old_freed_diff, gc_mem, \
+        old_pause_time, gc_time, \
+        thrash_counter, reason, \
+        current_heap, target_heap)
 #endif
 
 #ifdef MEMFENCE
@@ -658,8 +682,7 @@ void gc_count_pool(void);
 size_t jl_array_nbytes(jl_array_t *a) JL_NOTSAFEPOINT;
 
 JL_DLLEXPORT void jl_enable_gc_logging(int enable);
-JL_DLLEXPORT uint32_t jl_get_num_stack_mappings(void);
-void _report_gc_finished(uint64_t pause, uint64_t freed, int full, int recollect) JL_NOTSAFEPOINT;
+void _report_gc_finished(uint64_t pause, uint64_t freed, int full, int recollect, int64_t live_bytes) JL_NOTSAFEPOINT;
 
 #ifdef __cplusplus
 }
