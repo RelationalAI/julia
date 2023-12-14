@@ -3091,8 +3091,8 @@ static void gc_queue_remset(jl_ptls_t ptls, jl_ptls_t ptls2)
     int n_bnd_refyoung = 0;
     len = ptls2->heap.rem_bindings.len;
     items = ptls2->heap.rem_bindings.items;
-//    jl_value_t* root = (jl_value_t*)(&ptls2->heap.rem_bindings);
-//    gc_heap_snapshot_record_root(root, "rem_binding");
+    jl_value_t* root = (jl_value_t*)items[0];
+    if (root) gc_heap_snapshot_record_root(root, "rem_binding");
     for (size_t i = 0; i < len; i++) {
         jl_binding_t *ptr = (jl_binding_t*)items[i];
         uintptr_t bnd_refyoung = 0;
@@ -3102,7 +3102,7 @@ static void gc_queue_remset(jl_ptls_t ptls, jl_ptls_t ptls2)
         gc_try_claim_and_push(&ptls->mark_queue, ty, &bnd_refyoung);
         jl_value_t *globalref = jl_atomic_load_relaxed(&ptr->globalref);
         gc_try_claim_and_push(&ptls->mark_queue, globalref, &bnd_refyoung);
-//        gc_heap_snapshot_record_object_to_binding(root, ptr);
+        if (ptr) gc_heap_snapshot_record_object_to_binding(root, ptr);
         if (bnd_refyoung) {
             items[n_bnd_refyoung] = ptr;
             n_bnd_refyoung++;
