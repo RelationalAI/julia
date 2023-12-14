@@ -259,9 +259,7 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
 
         name = StringRef((const char*)str_.buf, str_.size);
     }
-    if (g_snapshot->nodes.size() == 4) {
-        std::cout << "node for object: " <<  static_cast<void*>(a) << "\n";
-    }
+
     g_snapshot->nodes.push_back(Node{
         g_snapshot->node_types.find_or_create_string_id(node_type), // size_t type;
         g_snapshot->names.find_or_create_string_id(name), // size_t name;
@@ -273,6 +271,10 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
         0,             // int detachedness;  // 0 - unknown,  1 - attached;  2 - detached
         vector<Edge>() // outgoing edges
     });
+
+    if (name.str().find("REPL.var\"#92#102\"") != std::string::npos) {
+        std::cout << "node for object: " <<  static_cast<void*>(a) << ", index: " << val.first->second << "\n";
+    }
 
     if (ios_need_close)
         ios_close(&str_);
@@ -296,6 +298,10 @@ static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef nam
         0,             // int detachedness;  // 0 - unknown,  1 - attached;  2 - detached
         vector<Edge>() // outgoing edges
     });
+
+    if (name.str().find("REPL.var\"#92#102\"") != std::string::npos) {
+        std::cout << "node for object: " <<  static_cast<void*>(a) << ", index: " << val.first->second << "\n";
+    }
 
     return val.first->second;
 }
