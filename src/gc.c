@@ -11,6 +11,7 @@
 extern "C" {
 #endif
 #include <stdio.h>
+#include <stdbool.h>
 
 int gc_print_count = 0;
 const int gc_print_limit = 400;
@@ -1993,17 +1994,21 @@ STATIC_INLINE jl_gc_chunk_t gc_chunkqueue_steal_from(jl_gc_markqueue_t *mq2) JL_
 }
 
 // Enqueue an unmarked obj. last bit of `nptr` is set if `_obj` is young
-STATIC_INLINE void gc_try_claim_and_push(jl_gc_markqueue_t *mq, void *_obj,
+STATIC_INLINE bool gc_try_claim_and_push(jl_gc_markqueue_t *mq, void *_obj,
                            uintptr_t *nptr) JL_NOTSAFEPOINT
 {
     if (_obj == NULL)
-        return;
+        return false;
     jl_value_t *obj = (jl_value_t *)jl_assume(_obj);
     jl_taggedvalue_t *o = jl_astaggedvalue(obj);
     if (!gc_old(o->header) && nptr)
         *nptr |= 1;
-    if (gc_try_setmark_tag(o, GC_MARKED))
+    if (gc_try_setmark_tag(o, GC_MARKED)) {
         gc_ptr_queue_push(mq, obj);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 // Mark object with 8bit field descriptors
@@ -3105,29 +3110,37 @@ extern jl_value_t *cmpswap_names JL_GLOBALLY_ROOTED;
 static void gc_mark_roots(jl_gc_markqueue_t *mq)
 {
     // modules
-    gc_try_claim_and_push(mq, jl_main_module, NULL);
-    gc_heap_snapshot_record_root((jl_value_t*)jl_main_module, "main_module");
+    if (gc_try_claim_and_push(mq, jl_main_module, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)jl_main_module, "main_module");
     // invisible builtin values
-    gc_try_claim_and_push(mq, jl_an_empty_vec_any, NULL);
-    gc_try_claim_and_push(mq, jl_module_init_order, NULL);
+    if (gc_try_claim_and_push(mq, jl_an_empty_vec_any, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)jl_an_empty_vec_any, "an_empty_vec_any");
+    if (gc_try_claim_and_push(mq, jl_module_init_order, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)jl_module_init_order, "module_init_order");
     for (size_t i = 0; i < jl_current_modules.size; i += 2) {
         if (jl_current_modules.table[i + 1] != HT_NOTFOUND) {
-            gc_try_claim_and_push(mq, jl_current_modules.table[i], NULL);
-            gc_heap_snapshot_record_root((jl_value_t*)jl_current_modules.table[i], "top level module");
+            if (gc_try_claim_and_push(mq, jl_current_modules.table[i], NULL))
+                gc_heap_snapshot_record_root((jl_value_t*)jl_current_modules.table[i], "top level module");
         }
     }
-    gc_try_claim_and_push(mq, jl_anytuple_type_type, NULL);
+    if (gc_try_claim_and_push(mq, jl_anytuple_type_type, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)jl_anytuple_type_type, "anytuple_type_type");
     for (size_t i = 0; i < N_CALL_CACHE; i++) {
         jl_typemap_entry_t *v = jl_atomic_load_relaxed(&call_cache[i]);
-        gc_try_claim_and_push(mq, v, NULL);
+        if (gc_try_claim_and_push(mq, v, NULL))
+            gc_heap_snapshot_record_array_edge_index((jl_value_t*)jl_anytuple_type_type, (jl_value_t*)v, i);
     }
-    gc_try_claim_and_push(mq, jl_all_methods, NULL);
-    gc_try_claim_and_push(mq, _jl_debug_method_invalidation, NULL);
+    if (gc_try_claim_and_push(mq, jl_all_methods, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)jl_all_methods, "all_methods");
+    if (gc_try_claim_and_push(mq, _jl_debug_method_invalidation, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)_jl_debug_method_invalidation, "debug_method_invalidation");
     // constants
-    gc_try_claim_and_push(mq, jl_emptytuple_type, NULL);
-    gc_try_claim_and_push(mq, cmpswap_names, NULL);
-    gc_try_claim_and_push(mq, jl_global_roots_table, NULL);
-    gc_heap_snapshot_record_root((jl_value_t*)jl_global_roots_table, "global_roots_table");
+    if (gc_try_claim_and_push(mq, jl_emptytuple_type, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)jl_emptytuple_type, "emptytuple_type");
+    if (gc_try_claim_and_push(mq, cmpswap_names, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)cmpswap_names, "cmpswap_names");
+    if (gc_try_claim_and_push(mq, jl_global_roots_table, NULL))
+        gc_heap_snapshot_record_root((jl_value_t*)jl_global_roots_table, "global_roots_table");
 }
 
 // find unmarked objects that need to be finalized from the finalizer list "list".

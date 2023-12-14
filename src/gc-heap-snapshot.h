@@ -60,6 +60,12 @@ static inline void gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL
         _gc_heap_snapshot_record_root(root, name);
     }
 }
+static inline void gc_heap_snapshot_record_array_edge_index(jl_value_t *from, jl_value_t *to, size_t index) JL_NOTSAFEPOINT
+{
+    if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
+        _gc_heap_snapshot_record_array_edge(from, to, index);
+    }
+}
 static inline void gc_heap_snapshot_record_array_edge(jl_value_t *from, jl_value_t **to) JL_NOTSAFEPOINT
 {
     if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
