@@ -2536,8 +2536,10 @@ void gc_mark_finlist(jl_gc_markqueue_t *mq, arraylist_t *list, size_t start)
 JL_DLLEXPORT int jl_gc_mark_queue_obj(jl_ptls_t ptls, jl_value_t *obj)
 {
     int may_claim = gc_try_setmark_tag(jl_astaggedvalue(obj), GC_MARKED);
-    if (may_claim)
+    if (may_claim) {
+        printf("gc_mark_queue_obj: %p\n", obj);
         gc_ptr_queue_push(&ptls->mark_queue, obj);
+    }
     return may_claim;
 }
 
@@ -2753,8 +2755,10 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
             if (new_obj != NULL) {
                 if (!meta_updated)
                     goto mark_obj;
-                else
+                else {
+                    printf("jl_task_type gc_ptr_queue_push: %p, parent: %p\n", new_obj, obj8_parent);
                     gc_ptr_queue_push(mq, new_obj);
+                }
             }
         }
         else if (vt == jl_string_type) {
@@ -2790,8 +2794,10 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
                 if (new_obj != NULL) {
                     if (!meta_updated)
                         goto mark_obj;
-                    else
+                    else {
+                        printf("fielddesc_type=0 gc_ptr_queue_push: %p, parent: %p\n", new_obj, obj8_parent);
                         gc_ptr_queue_push(mq, new_obj);
+                    }
                 }
             }
             else if (layout->fielddesc_type == 1) {
@@ -2803,8 +2809,10 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
                 if (new_obj != NULL) {
                     if (!meta_updated)
                         goto mark_obj;
-                    else
+                    else {
+                        printf("fielddesc_type=1 gc_ptr_queue_push: %p, parent: %p\n", new_obj, obj16_parent);
                         gc_ptr_queue_push(mq, new_obj);
+                    }
                 }
             }
             else if (layout->fielddesc_type == 2) {
@@ -2818,8 +2826,10 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
                 if (new_obj != NULL) {
                     if (!meta_updated)
                         goto mark_obj;
-                    else
+                    else {
+                        printf("fielddesc_type=2 gc_ptr_queue_push: %p, parent: %p\n", new_obj, obj32_parent);
                         gc_ptr_queue_push(mq, new_obj);
+                    }
                 }
             }
             else {
