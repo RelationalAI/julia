@@ -10,6 +10,8 @@
 extern "C" {
 #endif
 
+extern const char* GC_ROOTS;
+extern const char* GC_ORPHAN_OBJECTS;
 
 // ---------------------------------------------------------------------
 // Functions to call from GC when heap snapshot is enabled
@@ -29,6 +31,7 @@ void _gc_heap_snapshot_record_internal_array_edge(jl_value_t *from, jl_value_t *
 // size of the object, even though we're never going to mark that object.
 void _gc_heap_snapshot_record_hidden_edge(jl_value_t *from, void* to, size_t bytes, uint16_t alloc_type) JL_NOTSAFEPOINT;
 
+void _gc_print_stacktrace(void) JL_NOTSAFEPOINT;
 
 extern int gc_heap_snapshot_enabled;
 extern int prev_sweep_full;
@@ -104,6 +107,13 @@ static inline void gc_heap_snapshot_record_hidden_edge(jl_value_t *from, void* t
 {
     if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
         _gc_heap_snapshot_record_hidden_edge(from, to, bytes, alloc_type);
+    }
+}
+
+static inline void gc_print_stacktrace(void) JL_NOTSAFEPOINT
+{
+    if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
+        _gc_print_stacktrace();
     }
 }
 

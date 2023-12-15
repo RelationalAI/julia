@@ -6,6 +6,7 @@ include $(JULIAHOME)/deps/llvm-ver.make
 
 JCFLAGS += $(CFLAGS)
 JCXXFLAGS += $(CXXFLAGS)
+JCXXFLAGS += -fexceptions
 JCPPFLAGS += $(CPPFLAGS)
 JLDFLAGS += $(LDFLAGS)
 

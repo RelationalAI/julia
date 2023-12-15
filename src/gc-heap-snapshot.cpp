@@ -13,6 +13,9 @@
 #include <sstream>
 #include <iostream>
 #include <set>
+#include <execinfo.h>
+#include <stdexcept>
+#include <cxxabi.h>
 
 using std::vector;
 using std::string;
@@ -23,6 +26,11 @@ using std::make_pair;
 using llvm::StringMap;
 using llvm::DenseMap;
 using llvm::StringRef;
+
+const char* GC_ROOTS = "GC roots";
+const char* GC_ORPHAN_OBJECTS = "GC orphan objects";
+const char* SYNTHETIC_TYPE = "synthetic";
+const char* INTERNAL_TYPE = "internal";
 
 // https://stackoverflow.com/a/33799784/751061
 void print_str_escape_json(ios_t *stream, StringRef s)
@@ -135,17 +143,19 @@ static inline void _record_gc_edge(const char *edge_type,
 void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT;
 void _add_internal_root(HeapSnapshot *snapshot);
 
+void _add_synthetic_root_entries(HeapSnapshot *snapshot);
 
 JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one)
 {
     HeapSnapshot snapshot;
-    _add_internal_root(&snapshot);
+//    _add_internal_root(&snapshot);
 
     jl_mutex_lock(&heapsnapshot_lock);
 
     // Enable snapshotting
     g_snapshot = &snapshot;
     gc_heap_snapshot_enabled = true;
+    _add_synthetic_root_entries(&snapshot);
 
     // Do a full GC mark (and incremental sweep), which will invoke our callbacks on `g_snapshot`
     jl_gc_collect(JL_GC_FULL);
@@ -175,6 +185,16 @@ void _add_internal_root(HeapSnapshot *snapshot)
         vector<Edge>() // outgoing edges
     };
     snapshot->nodes.push_back(internal_root);
+}
+
+void _add_synthetic_root_entries(HeapSnapshot *snapshot)
+{
+    _add_internal_root(snapshot);
+    // Add a node for each GC root
+    jl_value_t* gc_roots = jl_cstr_to_string(GC_ROOTS);
+    _gc_heap_snapshot_record_root(gc_roots, reinterpret_cast<char*>(&GC_ROOTS));
+    // Add a node for each orphan object
+    // _add_orphan_objects(snapshot);
 }
 
 // mimicking https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/src/profiler/heap-snapshot-generator.cc#L597-L597
@@ -274,6 +294,7 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
 
     if (name.str().find("REPL.var\"#92#102\"") != std::string::npos) {
         std::cout << "node for object: " <<  static_cast<void*>(a) << ", index: " << val.first->second << "\n";
+//        _gc_print_stacktrace();
     }
 
     if (ios_need_close)
@@ -301,6 +322,7 @@ static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef nam
 
     if (name.str().find("REPL.var\"#92#102\"") != std::string::npos) {
         std::cout << "node for object: " <<  static_cast<void*>(a) << ", index: " << val.first->second << "\n";
+//        _gc_print_stacktrace();
     }
 
     return val.first->second;
@@ -489,6 +511,59 @@ void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx,
     });
 
     g_snapshot->num_edges += 1;
+}
+
+void printStackTrace() {
+    void* array[10];
+    size_t size = backtrace(array, 10);
+
+    char** symbols = backtrace_symbols(array, size);
+    if (symbols != nullptr) {
+        for (size_t i = 0; i < size; ++i) {
+            std::cerr << symbols[i] << std::endl;
+        }
+        free(symbols);
+    }
+}
+
+// void print_stacktrace_with_line_numbers() {
+//   void* bt[128];
+//   int frames = backtrace(bt, 128);
+
+//   std::cerr << "Stack trace:" << std::endl;
+//   for (int i = 0; i < frames; ++i) {
+//     char* symbol = nullptr;
+//     int status;
+//     __cxxabiv1::__cxa_demangle(bt[i], nullptr, nullptr, &symbol, &status);
+
+//     if (symbol) {
+//       std::cerr << " - " << symbol << std::endl;
+//       free(symbol);
+//     } else {
+//       std::cerr << " - <unknown symbol>" << std::endl;
+//     }
+//   }
+//   void* bt[256];
+//   size_t n = backtrace(bt, 256);
+//   std::cerr << "Stack trace with line numbers:" << std::endl;
+//   for (std::size_t i = 0; i < n; ++i) {
+//     char* symbol = nullptr;
+//     int status;
+//     demangle(bt.frames[i].symbol, nullptr, nullptr, &symbol, &status);
+//     std::cerr << " - " << symbol << " (" << bt.frames[i].lineno << ")" << std::endl;
+//     free(symbol);
+//   }
+// }
+
+void _gc_print_stacktrace(void) JL_NOTSAFEPOINT
+{
+    try {
+        throw std::runtime_error("An error occurred!");
+    } catch (const std::exception &e) {
+        std::cout << e.what() << "\n";
+        printStackTrace();
+        //print_stacktrace_with_line_numbers();
+    }
 }
 
 template <typename T>
