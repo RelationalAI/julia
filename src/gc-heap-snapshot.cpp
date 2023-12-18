@@ -32,6 +32,8 @@ const char* GC_ORPHAN_OBJECTS = "GC orphan objects";
 const char* SYNTHETIC_TYPE = "synthetic";
 const char* INTERNAL_TYPE = "internal";
 
+static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef name) JL_NOTSAFEPOINT;
+
 // https://stackoverflow.com/a/33799784/751061
 void print_str_escape_json(ios_t *stream, StringRef s)
 {
@@ -129,6 +131,8 @@ struct HeapSnapshot {
     StringTable edge_types;
     DenseMap<void *, size_t> node_ptr_to_index_map;
     size_t num_edges = 0; // For metadata, updated as you add each edge. Needed because edges owned by nodes.
+    int _gc_root_idx = 1;
+    int _gc_orphan_idx = 2;
 };
 
 // global heap snapshot, mutated by garbage collector
@@ -192,9 +196,16 @@ void _add_synthetic_root_entries(HeapSnapshot *snapshot)
     _add_internal_root(snapshot);
     // Add a node for each GC root
     jl_value_t* gc_roots = jl_cstr_to_string(GC_ROOTS);
-    _gc_heap_snapshot_record_root(gc_roots, reinterpret_cast<char*>(&GC_ROOTS));
-    // Add a node for each orphan object
-    // _add_orphan_objects(snapshot);
+    record_pointer_to_gc_snapshot(gc_roots, 0, GC_ROOTS);
+    snapshot->_gc_root_idx = snapshot->node_ptr_to_index_map[gc_roots];
+    auto to_node_idx = g_snapshot->node_ptr_to_index_map[gc_roots];
+    _record_gc_just_edge("internal", snapshot->nodes.front(), to_node_idx,
+        g_snapshot->names.find_or_create_string_id("<internal>"));
+    jl_value_t* gc_orphan_objects = jl_cstr_to_string(GC_ORPHAN_OBJECTS);
+    record_pointer_to_gc_snapshot(gc_orphan_objects, 0, GC_ORPHAN_OBJECTS);
+    snapshot->_gc_orphan_idx = snapshot->node_ptr_to_index_map[gc_orphan_objects];
+    _record_gc_edge("internal", gc_roots, gc_orphan_objects,
+                    g_snapshot->names.find_or_create_string_id("<internal>"));
 }
 
 // mimicking https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/src/profiler/heap-snapshot-generator.cc#L597-L597
@@ -369,6 +380,17 @@ void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT
     auto edge_label = g_snapshot->names.find_or_create_string_id(name);
     std::cout << "record root edge: " << name << " for node idx: " << to_node_idx <<"\n";
     _record_gc_just_edge("internal", internal_root, to_node_idx, edge_label);
+}
+
+void _gc_heap_snapshot_record_gc_roots(jl_value_t *root, char *name) JL_NOTSAFEPOINT
+{
+    record_node_to_gc_snapshot(root);
+
+    auto from_node_idx = g_snapshot->_gc_root_idx;
+    auto to_node_idx = g_snapshot->node_ptr_to_index_map[root];
+    auto edge_label = g_snapshot->names.find_or_create_string_id(name);
+    std::cout << "record gc roots edge: " << name << " for node idx: " << to_node_idx <<"\n";
+    _record_gc_just_edge("internal", g_snapshot->nodes[from_node_idx], to_node_idx, edge_label);
 }
 
 // Add a node to the heap snapshot representing a Julia stack frame.

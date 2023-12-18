@@ -10,13 +10,14 @@
 extern "C" {
 #endif
 
-extern const char* GC_ROOTS;
-extern const char* GC_ORPHAN_OBJECTS;
+//extern const char* GC_ROOTS;
+//extern const char* GC_ORPHAN_OBJECTS;
 
 // ---------------------------------------------------------------------
 // Functions to call from GC when heap snapshot is enabled
 // ---------------------------------------------------------------------
 void _gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL_NOTSAFEPOINT;
+void _gc_heap_snapshot_record_gc_roots(jl_value_t *root, char *name) JL_NOTSAFEPOINT;
 void _gc_heap_snapshot_record_frame_to_object_edge(void *from, jl_value_t *to) JL_NOTSAFEPOINT;
 void _gc_heap_snapshot_record_task_to_frame_edge(jl_task_t *from, void *to) JL_NOTSAFEPOINT;
 void _gc_heap_snapshot_record_frame_to_frame_edge(jl_gcframe_t *from, jl_gcframe_t *to) JL_NOTSAFEPOINT;
@@ -61,6 +62,12 @@ static inline void gc_heap_snapshot_record_root(jl_value_t *root, char *name) JL
 {
     if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
         _gc_heap_snapshot_record_root(root, name);
+    }
+}
+static inline void gc_heap_snapshot_record_gc_roots(jl_value_t *root, char *name) JL_NOTSAFEPOINT
+{
+    if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
+        _gc_heap_snapshot_record_gc_roots(root, name);
     }
 }
 static inline void gc_heap_snapshot_record_array_edge_index(jl_value_t *from, jl_value_t *to, size_t index) JL_NOTSAFEPOINT
