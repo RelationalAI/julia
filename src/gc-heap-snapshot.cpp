@@ -164,7 +164,7 @@ JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one)
     // Do a full GC mark (and incremental sweep), which will invoke our callbacks on `g_snapshot`
     jl_gc_collect(JL_GC_FULL);
 
-    process_orphan_nodes(snapshot);
+    //process_orphan_nodes(snapshot);
 
     // Disable snapshotting
     gc_heap_snapshot_enabled = false;
@@ -208,6 +208,7 @@ void _add_synthetic_root_entries(HeapSnapshot *snapshot)
     snapshot->_gc_orphan_idx = snapshot->node_ptr_to_index_map[gc_orphan_objects];
     _record_gc_edge("internal", gc_roots, gc_orphan_objects,
                     g_snapshot->names.find_or_create_string_id("<internal>"));
+    std::cout << "add synthetic root entries: " << snapshot->_gc_root_idx << ", " << snapshot->_gc_orphan_idx << "\n";
 }
 
 // mimicking https://github.com/nodejs/node/blob/5fd7a72e1c4fbaf37d3723c4c81dce35c149dc84/deps/v8/src/profiler/heap-snapshot-generator.cc#L597-L597
@@ -307,7 +308,7 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
 
     if (name.str().find("REPL.var\"#92#102\"") != std::string::npos) {
         std::cout << "node for object: " <<  static_cast<void*>(a) << ", index: " << val.first->second << "\n";
-//        _gc_print_stacktrace();
+ //       _gc_print_stacktrace();
     }
 
     if (ios_need_close)
@@ -748,7 +749,7 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
         if (orphans.find(n_id) != orphans.end()) {
             std::cout << "orphan node: {type:(" << from_node.type << "," << get_string(snapshot.node_types, from_node.type) << ")"
             << ", name:(" << from_node.name << "," << get_string(snapshot.names, from_node.name) << ")"
-            << ", id:(" << std::showbase << std::hex << from_node.id << "," << n_id << ")"
+            << ", id:(" << std::showbase << std::hex << from_node.id << "," << std::dec << n_id << ")"
             << ", self_size:" << (all_one ? (size_t)1 : from_node.self_size)
             << ", edge_count:" << from_node.edges.size()
             << ", trace_node_id:" << from_node.trace_node_id
