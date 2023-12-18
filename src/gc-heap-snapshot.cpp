@@ -32,8 +32,6 @@ const char* GC_ORPHAN_OBJECTS = "GC orphan objects";
 const char* SYNTHETIC_TYPE = "synthetic";
 const char* INTERNAL_TYPE = "internal";
 
-static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef name) JL_NOTSAFEPOINT;
-
 // https://stackoverflow.com/a/33799784/751061
 void print_str_escape_json(ios_t *stream, StringRef s)
 {
@@ -146,8 +144,10 @@ static inline void _record_gc_edge(const char *edge_type,
                                    jl_value_t *a, jl_value_t *b, size_t name_or_index) JL_NOTSAFEPOINT;
 void _record_gc_just_edge(const char *edge_type, Node &from_node, size_t to_idx, size_t name_or_idx) JL_NOTSAFEPOINT;
 void _add_internal_root(HeapSnapshot *snapshot);
-
 void _add_synthetic_root_entries(HeapSnapshot *snapshot);
+void gc_heap_snapshot_record_gc_orphan_object(size_t orphan_idx) JL_NOTSAFEPOINT;
+static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef name) JL_NOTSAFEPOINT;
+void process_orphan_nodes(HeapSnapshot &snapshot);
 
 JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one)
 {
@@ -163,6 +163,8 @@ JL_DLLEXPORT void jl_gc_take_heap_snapshot(ios_t *stream, char all_one)
 
     // Do a full GC mark (and incremental sweep), which will invoke our callbacks on `g_snapshot`
     jl_gc_collect(JL_GC_FULL);
+
+    process_orphan_nodes(snapshot);
 
     // Disable snapshotting
     gc_heap_snapshot_enabled = false;
@@ -393,6 +395,14 @@ void _gc_heap_snapshot_record_gc_roots(jl_value_t *root, char *name) JL_NOTSAFEP
     _record_gc_just_edge("internal", g_snapshot->nodes[from_node_idx], to_node_idx, edge_label);
 }
 
+void gc_heap_snapshot_record_gc_orphan_object(size_t orphan_idx) JL_NOTSAFEPOINT
+{
+    auto from_node_idx = g_snapshot->_gc_orphan_idx;
+    auto edge_label = g_snapshot->names.find_or_create_string_id("<internal>");
+    std::cout << "record gc orphan object: " << from_node_idx << " to " << orphan_idx <<"\n";
+    _record_gc_just_edge("internal", g_snapshot->nodes[from_node_idx], orphan_idx, edge_label);
+}
+
 // Add a node to the heap snapshot representing a Julia stack frame.
 // Each task points at a stack frame, which points at the stack frame of
 // the function it's currently calling, forming a linked list.
@@ -608,6 +618,41 @@ std::string to_json(const std::set<T>& set) {
 
 std::string get_string(StringTable &table, size_t id) {
     return table.get(id);
+}
+
+void process_orphan_nodes(HeapSnapshot &snapshot)
+{
+    set<size_t> orphans;
+    for (const auto &from_node : snapshot.nodes) {
+        void * ptr = (void*)from_node.id;
+        size_t n_id = snapshot.node_ptr_to_index_map[ptr];
+        orphans.insert(n_id);
+    }
+    set<size_t> removed_nodes;
+    for (const auto &from_node : snapshot.nodes) {
+        for (const auto &edge : from_node.edges) {
+            auto n_id = edge.to_node;
+            auto it = orphans.find(n_id);
+            if (it != orphans.end()) {
+                removed_nodes.insert(n_id);
+                orphans.erase(it);
+            } else {
+                auto nit = removed_nodes.find(n_id);
+                if (nit == removed_nodes.end()) {
+                    std::cout << "edge to non-existent node: " << n_id << "\n";
+                }
+            }
+        }
+    }
+    for (const auto &from_node : snapshot.nodes) {
+        void * ptr = (void*)from_node.id;
+        size_t n_id = snapshot.node_ptr_to_index_map[ptr];
+        if (orphans.find(n_id) != orphans.end()) {
+            if (n_id != 0) {
+                gc_heap_snapshot_record_gc_orphan_object(n_id);
+            }
+        }
+    }
 }
 
 void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one)
