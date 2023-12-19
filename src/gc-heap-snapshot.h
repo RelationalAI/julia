@@ -12,6 +12,7 @@ extern "C" {
 
 //extern const char* GC_ROOTS;
 //extern const char* GC_ORPHAN_OBJECTS;
+extern const char* GC_FINALIST_ROOTS;
 
 // ---------------------------------------------------------------------
 // Functions to call from GC when heap snapshot is enabled
@@ -31,6 +32,8 @@ void _gc_heap_snapshot_record_internal_array_edge(jl_value_t *from, jl_value_t *
 // Used for objects manually allocated in C (outside julia GC), to still tell the heap snapshot about the
 // size of the object, even though we're never going to mark that object.
 void _gc_heap_snapshot_record_hidden_edge(jl_value_t *from, void* to, size_t bytes, uint16_t alloc_type) JL_NOTSAFEPOINT;
+
+void _gc_heap_snapshot_record_finalizer(jl_value_t *finalizer) JL_NOTSAFEPOINT;
 
 void _gc_print_stacktrace(void) JL_NOTSAFEPOINT;
 
@@ -121,6 +124,13 @@ static inline void gc_print_stacktrace(void) JL_NOTSAFEPOINT
 {
     if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
         _gc_print_stacktrace();
+    }
+}
+
+static inline void gc_heap_snapshot_record_finalizer(jl_value_t *finalizer) JL_NOTSAFEPOINT
+{
+    if (__unlikely(gc_heap_snapshot_enabled && prev_sweep_full)) {
+        _gc_heap_snapshot_record_finalizer(finalizer);
     }
 }
 

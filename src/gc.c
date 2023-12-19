@@ -15,6 +15,7 @@ extern "C" {
 
 int gc_print_count = 0;
 const int gc_print_limit = 1;
+void *bt_address = (void *)0xffffb3f848a0;
 
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
@@ -1999,6 +2000,9 @@ STATIC_INLINE bool gc_try_claim_and_push(jl_gc_markqueue_t *mq, void *_obj,
 {
     if (_obj == NULL)
         return false;
+    if (_obj == bt_address) {
+        printf("gc_try_claim_and_push: %p\n", _obj);
+    }
     jl_value_t *obj = (jl_value_t *)jl_assume(_obj);
     jl_taggedvalue_t *o = jl_astaggedvalue(obj);
     if (!gc_old(o->header) && nptr)
@@ -2358,9 +2362,10 @@ STATIC_INLINE void gc_mark_chunk(jl_ptls_t ptls, jl_gc_markqueue_t *mq, jl_gc_ch
             break;
         }
         case GC_finlist_chunk: {
+            jl_value_t *fl_parent = c->parent;
             jl_value_t **fl_begin = c->begin;
             jl_value_t **fl_end = c->end;
-            gc_mark_finlist_(mq, fl_begin, fl_end);
+            gc_mark_finlist_(mq, fl_parent, fl_begin, fl_end);
             break;
         }
         default: {
@@ -2497,7 +2502,7 @@ STATIC_INLINE void gc_mark_module_binding(jl_ptls_t ptls, jl_module_t *mb_parent
     }
 }
 
-void gc_mark_finlist_(jl_gc_markqueue_t *mq, jl_value_t **fl_begin, jl_value_t **fl_end)
+void gc_mark_finlist_(jl_gc_markqueue_t *mq, jl_value_t *fl_parent, jl_value_t **fl_begin, jl_value_t **fl_end)
 {
     jl_value_t *new_obj;
     // Decide whether need to chunk finlist
@@ -2508,7 +2513,9 @@ void gc_mark_finlist_(jl_gc_markqueue_t *mq, jl_value_t **fl_begin, jl_value_t *
         fl_end = fl_begin + GC_CHUNK_BATCH_SIZE;
     }
     for (; fl_begin < fl_end; fl_begin++) {
-        new_obj = *fl_begin;
+        jl_value_t **slot = fl_begin;
+        new_obj = *slot;
+//        new_obj = *fl_begin;
         if (__unlikely(!new_obj))
             continue;
         if (gc_ptr_tag(new_obj, 1)) {
@@ -2519,6 +2526,11 @@ void gc_mark_finlist_(jl_gc_markqueue_t *mq, jl_value_t **fl_begin, jl_value_t *
         if (gc_ptr_tag(new_obj, 2))
             continue;
         gc_try_claim_and_push(mq, new_obj, NULL);
+        if (fl_parent != NULL) {
+            gc_heap_snapshot_record_array_edge(fl_parent, slot);
+        } else {
+            gc_heap_snapshot_record_finalizer(new_obj);
+        }
     }
 }
 
@@ -2528,9 +2540,12 @@ void gc_mark_finlist(jl_gc_markqueue_t *mq, arraylist_t *list, size_t start)
     size_t len = list->len;
     if (len <= start)
         return;
+//    jl_value_t *fl_parent = (jl_value_t *)list;
+//    jl_value_t *fl_parent = (jl_value_t *)*list->items;
+//    jl_value_t *fl_parent = jl_cstr_to_string(GC_FINALIST_ROOTS);
     jl_value_t **fl_begin = (jl_value_t **)list->items + start;
     jl_value_t **fl_end = (jl_value_t **)list->items + len;
-    gc_mark_finlist_(mq, fl_begin, fl_end);
+    gc_mark_finlist_(mq, NULL, fl_begin, fl_end);
 }
 
 JL_DLLEXPORT int jl_gc_mark_queue_obj(jl_ptls_t ptls, jl_value_t *obj)
@@ -2795,7 +2810,7 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
                     if (!meta_updated)
                         goto mark_obj;
                     else {
-                        if (gc_heap_snapshot_enabled) printf("fielddesc_type=0 gc_ptr_queue_push: %p, parent: %p\n", new_obj, obj8_parent);
+//                        if (gc_heap_snapshot_enabled) printf("fielddesc_type=0 gc_ptr_queue_push: %p, parent: %p\n", new_obj, obj8_parent);
                         gc_ptr_queue_push(mq, new_obj);
                     }
                 }
