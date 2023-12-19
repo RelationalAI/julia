@@ -31,6 +31,7 @@ const char* GC_ROOTS = "GC roots";
 const char* GC_ORPHAN_OBJECTS = "GC orphan objects";
 const char* SYNTHETIC_TYPE = "synthetic";
 const char* INTERNAL_TYPE = "internal";
+const bool GC_SNAPSHOT_TRACE_ENABLED = false;
 
 #define BT_BUF_SIZE 6
 
@@ -318,9 +319,11 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
  //       _gc_print_stacktrace();
     }
 
-    StacktraceBuf stackbuf;
-    backtrace(stackbuf.buffer, BT_BUF_SIZE);
-    g_snapshot->stacktrace_map.insert(make_pair(a, stackbuf));
+    if (GC_SNAPSHOT_TRACE_ENABLED) {
+        StacktraceBuf stackbuf;
+        backtrace(stackbuf.buffer, BT_BUF_SIZE);
+        g_snapshot->stacktrace_map.insert(make_pair(a, stackbuf));
+    }
 
     if (ios_need_close)
         ios_close(&str_);
@@ -350,9 +353,11 @@ static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef nam
 //        _gc_print_stacktrace();
     }
 
-    StacktraceBuf stackbuf;
-    backtrace(stackbuf.buffer, BT_BUF_SIZE);
-    g_snapshot->stacktrace_map.insert(make_pair(a, stackbuf));
+    if (GC_SNAPSHOT_TRACE_ENABLED) {
+        StacktraceBuf stackbuf;
+        backtrace(stackbuf.buffer, BT_BUF_SIZE);
+        g_snapshot->stacktrace_map.insert(make_pair(a, stackbuf));
+    }
 
     return val.first->second;
 }
@@ -440,9 +445,11 @@ size_t _record_stack_frame_node(HeapSnapshot *snapshot, void *frame) JL_NOTSAFEP
         vector<Edge>() // outgoing edges
     });
 
-    StacktraceBuf stackbuf;
-    backtrace(stackbuf.buffer, BT_BUF_SIZE);
-    g_snapshot->stacktrace_map.insert(make_pair(frame, stackbuf));
+    if (GC_SNAPSHOT_TRACE_ENABLED) {
+        StacktraceBuf stackbuf;
+        backtrace(stackbuf.buffer, BT_BUF_SIZE);
+        g_snapshot->stacktrace_map.insert(make_pair(frame, stackbuf));
+    }
 
     return val.first->second;
 }
@@ -709,7 +716,9 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
                                 edge.type,
                                 edge.name_or_index,
                                 edge.to_node * k_node_number_of_fields);
-                                // edge.to_node);
+            if (edge.to_node == 0) {
+                std::cout << "Warning: edge.to_node should not be zero for from_node: " << std::showbase << std::hex << edge.to_node << std::dec << "\n";
+            }
             auto n_id = edge.to_node;
             auto it = orphans.find(n_id);
             if (it != orphans.end()) {
@@ -747,7 +756,8 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
             << ", trace_node_id:" << from_node.trace_node_id
             << ", detachedness:" << from_node.detachedness
             << "}\n";
-            if (from_node.id != 0) {
+
+            if (GC_SNAPSHOT_TRACE_ENABLED && from_node.id != 0) {
                 auto bt_buf = snapshot.stacktrace_map[ptr];
                 std::cout << "stacktrace for node: " << ptr << "\n";
                 for (size_t j = 0; j < BT_BUF_SIZE; j++) {
