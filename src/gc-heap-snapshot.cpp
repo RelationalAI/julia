@@ -32,6 +32,12 @@ const char* GC_ORPHAN_OBJECTS = "GC orphan objects";
 const char* SYNTHETIC_TYPE = "synthetic";
 const char* INTERNAL_TYPE = "internal";
 
+#define BT_BUF_SIZE 6
+
+typedef struct StacktraceBuf {
+    void *buffer[BT_BUF_SIZE];
+} StacktraceBuf;
+
 // https://stackoverflow.com/a/33799784/751061
 void print_str_escape_json(ios_t *stream, StringRef s)
 {
@@ -131,6 +137,7 @@ struct HeapSnapshot {
     size_t num_edges = 0; // For metadata, updated as you add each edge. Needed because edges owned by nodes.
     int _gc_root_idx = 1;
     int _gc_orphan_idx = 2;
+    DenseMap<void *, StacktraceBuf> stacktrace_map;
 };
 
 // global heap snapshot, mutated by garbage collector
@@ -311,6 +318,10 @@ size_t record_node_to_gc_snapshot(jl_value_t *a) JL_NOTSAFEPOINT
  //       _gc_print_stacktrace();
     }
 
+    StacktraceBuf stackbuf;
+    backtrace(stackbuf.buffer, BT_BUF_SIZE);
+    g_snapshot->stacktrace_map.insert(make_pair(a, stackbuf));
+
     if (ios_need_close)
         ios_close(&str_);
 
@@ -338,6 +349,10 @@ static size_t record_pointer_to_gc_snapshot(void *a, size_t bytes, StringRef nam
         std::cout << "node for object: " <<  static_cast<void*>(a) << ", index: " << val.first->second << "\n";
 //        _gc_print_stacktrace();
     }
+
+    StacktraceBuf stackbuf;
+    backtrace(stackbuf.buffer, BT_BUF_SIZE);
+    g_snapshot->stacktrace_map.insert(make_pair(a, stackbuf));
 
     return val.first->second;
 }
@@ -424,6 +439,10 @@ size_t _record_stack_frame_node(HeapSnapshot *snapshot, void *frame) JL_NOTSAFEP
         0, // int detachedness;  // 0 - unknown,  1 - attached;  2 - detached
         vector<Edge>() // outgoing edges
     });
+
+    StacktraceBuf stackbuf;
+    backtrace(stackbuf.buffer, BT_BUF_SIZE);
+    g_snapshot->stacktrace_map.insert(make_pair(frame, stackbuf));
 
     return val.first->second;
 }
@@ -529,7 +548,9 @@ static inline void _record_gc_edge(const char *edge_type, jl_value_t *a,
 {
     auto from_node_idx = record_node_to_gc_snapshot(a);
     auto to_node_idx = record_node_to_gc_snapshot(b);
-
+    if (to_node_idx == 0) {
+        std::cout << "Warning: to_node_idx should not be zero for b: " << std::showbase << std::hex << b << std::dec << "\n";
+    }
     auto &from_node = g_snapshot->nodes[from_node_idx];
 
     _record_gc_just_edge(edge_type, from_node, to_node_idx, name_or_idx);
@@ -558,35 +579,6 @@ void printStackTrace() {
         free(symbols);
     }
 }
-
-// void print_stacktrace_with_line_numbers() {
-//   void* bt[128];
-//   int frames = backtrace(bt, 128);
-
-//   std::cerr << "Stack trace:" << std::endl;
-//   for (int i = 0; i < frames; ++i) {
-//     char* symbol = nullptr;
-//     int status;
-//     __cxxabiv1::__cxa_demangle(bt[i], nullptr, nullptr, &symbol, &status);
-
-//     if (symbol) {
-//       std::cerr << " - " << symbol << std::endl;
-//       free(symbol);
-//     } else {
-//       std::cerr << " - <unknown symbol>" << std::endl;
-//     }
-//   }
-//   void* bt[256];
-//   size_t n = backtrace(bt, 256);
-//   std::cerr << "Stack trace with line numbers:" << std::endl;
-//   for (std::size_t i = 0; i < n; ++i) {
-//     char* symbol = nullptr;
-//     int status;
-//     demangle(bt.frames[i].symbol, nullptr, nullptr, &symbol, &status);
-//     std::cerr << " - " << symbol << " (" << bt.frames[i].lineno << ")" << std::endl;
-//     free(symbol);
-//   }
-// }
 
 void _gc_print_stacktrace(void) JL_NOTSAFEPOINT
 {
@@ -755,6 +747,20 @@ void serialize_heap_snapshot(ios_t *stream, HeapSnapshot &snapshot, char all_one
             << ", trace_node_id:" << from_node.trace_node_id
             << ", detachedness:" << from_node.detachedness
             << "}\n";
+            if (from_node.id != 0) {
+                auto bt_buf = snapshot.stacktrace_map[ptr];
+                std::cout << "stacktrace for node: " << ptr << "\n";
+                for (size_t j = 0; j < BT_BUF_SIZE; j++) {
+                    jl_gdblookup(bt_buf.buffer[j]);
+                }
+            }
         }
     }
+
+    // for (auto buf_pair  : snapshot.stacktrace_map) {
+    //     std::cout << "stacktrace for node: " << buf_pair.first << "\n";
+    //     for (size_t j = 0; j < BT_BUF_SIZE; j++) {
+    //         jl_gdblookup(buf_pair.second.buffer[j]);
+    //     }
+    // }
 }
