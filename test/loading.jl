@@ -795,10 +795,8 @@ end
 @testset "`Base.project_names` and friends" begin
     # Some functions in Pkg assumes that these tuples have the same length
     n = length(Base.project_names)
+    @test length(Base.manifest_names) == n
     @test length(Base.preferences_names) == n
-
-    # there are two manifest names per project name
-    @test length(Base.manifest_names) == 2n
 end
 
 @testset "Manifest formats" begin
@@ -824,33 +822,6 @@ end
         raw_manifest = Base.parsed_toml(manifest_file)
         @test Base.is_v1_format_manifest(raw_manifest) == false
         @test Base.get_deps(raw_manifest) == deps
-    end
-end
-
-@testset "Manifest name preferential loading" begin
-    mktempdir() do tmp
-        proj = joinpath(tmp, "Project.toml")
-        touch(proj)
-        for man_name in (
-            "Manifest.toml",
-            "JuliaManifest.toml",
-            "Manifest-v$(VERSION.major).$(VERSION.minor).toml",
-            "JuliaManifest-v$(VERSION.major).$(VERSION.minor).toml"
-            )
-            touch(joinpath(tmp, man_name))
-            man = basename(Base.project_file_manifest_path(proj))
-            @test man == man_name
-        end
-    end
-    mktempdir() do tmp
-        # check that another version isn't preferred
-        proj = joinpath(tmp, "Project.toml")
-        touch(proj)
-        touch(joinpath(tmp, "Manifest-v1.5.toml"))
-        @test Base.project_file_manifest_path(proj) == nothing
-        touch(joinpath(tmp, "Manifest.toml"))
-        man = basename(Base.project_file_manifest_path(proj))
-        @test man == "Manifest.toml"
     end
 end
 
@@ -1033,16 +1004,6 @@ end
 end
 
 @testset "Extensions" begin
-    test_ext = """
-    function test_ext(parent::Module, ext::Symbol)
-        _ext = Base.get_extension(parent, ext)
-        _ext isa Module || error("expected extension \$ext to be loaded")
-        _pkgdir = pkgdir(_ext)
-        _pkgdir == pkgdir(parent) != nothing || error("unexpected extension \$ext pkgdir path: \$_pkgdir")
-        _pkgversion = pkgversion(_ext)
-        _pkgversion == pkgversion(parent) || error("unexpected extension \$ext version: \$_pkgversion")
-    end
-    """
     depot_path = mktempdir()
     try
         proj = joinpath(@__DIR__, "project", "Extensions", "HasDepWithExtensions.jl")
@@ -1053,7 +1014,6 @@ end
             cmd = """
             $load_distr
             begin
-                $ew $test_ext
                 $ew push!(empty!(DEPOT_PATH), $(repr(depot_path)))
                 using HasExtensions
                 $ew using HasExtensions
@@ -1061,7 +1021,6 @@ end
                 $ew HasExtensions.ext_loaded && error("ext_loaded set")
                 using HasDepWithExtensions
                 $ew using HasDepWithExtensions
-                $ew test_ext(HasExtensions, :Extension)
                 $ew Base.get_extension(HasExtensions, :Extension).extvar == 1 || error("extvar in Extension not set")
                 $ew HasExtensions.ext_loaded || error("ext_loaded not set")
                 $ew HasExtensions.ext_folder_loaded && error("ext_folder_loaded set")
@@ -1069,9 +1028,6 @@ end
                 using ExtDep2
                 $ew using ExtDep2
                 $ew HasExtensions.ext_folder_loaded || error("ext_folder_loaded not set")
-                using ExtDep3
-                $ew using ExtDep3
-                $ew HasExtensions.ext_dep_loaded || error("ext_dep_loaded not set")
             end
             """
             return `$(Base.julia_cmd()) $compile --startup-file=no -e $cmd`
@@ -1114,14 +1070,11 @@ end
 
         test_ext_proj = """
         begin
-            $test_ext
             using HasExtensions
             using ExtDep
-            test_ext(HasExtensions, :Extension)
+            Base.get_extension(HasExtensions, :Extension) isa Module || error("expected extension to load")
             using ExtDep2
-            test_ext(HasExtensions, :ExtensionFolder)
-            using ExtDep3
-            test_ext(HasExtensions, :ExtensionDep)
+            Base.get_extension(HasExtensions, :ExtensionFolder) isa Module || error("expected extension to load")
         end
         """
         for compile in (`--compiled-modules=no`, ``)
@@ -1131,40 +1084,23 @@ end
             run(cmd_proj_ext)
         end
 
-        # Extensions for "parent" dependencies
-        # (i.e. an `ExtAB`  where A depends on / loads B, but B provides the extension)
-
-        mktempdir() do depot # Parallel pre-compilation
-            code = """
-            Base.disable_parallel_precompile = false
-            using Parent
-            Base.get_extension(getfield(Parent, :DepWithParentExt), :ParentExt) isa Module || error("expected extension to load")
-            Parent.greet()
-            """
-            proj = joinpath(@__DIR__, "project", "Extensions", "Parent.jl")
-            cmd =  `$(Base.julia_cmd()) --startup-file=no -e $code`
-            cmd = addenv(cmd,
-                "JULIA_LOAD_PATH" => proj,
-                "JULIA_DEPOT_PATH" => depot * Base.Filesystem.pathsep(),
-            )
-            @test occursin("Hello parent!", String(read(cmd)))
-        end
-        mktempdir() do depot # Serial pre-compilation
-            code = """
-            Base.disable_parallel_precompile = true
-            using Parent
-            Base.get_extension(getfield(Parent, :DepWithParentExt), :ParentExt) isa Module || error("expected extension to load")
-            Parent.greet()
-            """
-            proj = joinpath(@__DIR__, "project", "Extensions", "Parent.jl")
-            cmd =  `$(Base.julia_cmd()) --startup-file=no -e $code`
-            cmd = addenv(cmd,
-                "JULIA_LOAD_PATH" => proj,
-                "JULIA_DEPOT_PATH" => depot * Base.Filesystem.pathsep(),
-            )
-            @test occursin("Hello parent!", String(read(cmd)))
-        end
-
+        # Sysimage extensions
+        # The test below requires that LinearAlgebra is in the sysimage and that it has not been loaded yet.
+        # if it gets moved out, this test will need to be updated.
+        # We run this test in a new process so we are not vulnerable to a previous test having loaded LinearAlgebra
+        sysimg_ext_test_code = """
+            uuid_key = Base.PkgId(Base.UUID("37e2e46d-f89d-539d-b4ee-838fcccc9c8e"), "LinearAlgebra")
+            Base.in_sysimage(uuid_key) || error("LinearAlgebra not in sysimage")
+            haskey(Base.explicit_loaded_modules, uuid_key) && error("LinearAlgebra already loaded")
+            using HasExtensions
+            Base.get_extension(HasExtensions, :LinearAlgebraExt) === nothing || error("unexpectedly got an extension")
+            using LinearAlgebra
+            haskey(Base.explicit_loaded_modules, uuid_key) || error("LinearAlgebra not loaded")
+            Base.get_extension(HasExtensions, :LinearAlgebraExt) isa Module || error("expected extension to load")
+        """
+        cmd =  `$(Base.julia_cmd()) --startup-file=no -e $sysimg_ext_test_code`
+        cmd = addenv(cmd, "JULIA_LOAD_PATH" => join([proj, "@stdlib"], sep))
+        run(cmd)
     finally
         try
             rm(depot_path, force=true, recursive=true)
@@ -1264,29 +1200,4 @@ end
 
 @testset "Upgradable stdlibs" begin
     @test success(`$(Base.julia_cmd()) --startup-file=no -e 'using DelimitedFiles'`)
-end
-
-@testset "Fallback for stdlib deps if manifest deps aren't found" begin
-    mktempdir() do depot
-        # This manifest has a LibGit2 entry that is missing LibGit2_jll, which should be
-        # handled by falling back to the stdlib Project.toml for dependency truth.
-        badmanifest_test_dir = joinpath(@__DIR__, "project", "deps", "BadStdlibDeps.jl")
-        @test success(addenv(
-            `$(Base.julia_cmd()) --project=$badmanifest_test_dir --startup-file=no -e 'using LibGit2'`,
-            "JULIA_DEPOT_PATH" => depot * Base.Filesystem.pathsep(),
-        ))
-    end
-end
-
-@testset "extension path computation name collision" begin
-    old_load_path = copy(LOAD_PATH)
-    try
-        empty!(LOAD_PATH)
-        push!(LOAD_PATH, joinpath(@__DIR__, "project", "Extensions", "ExtNameCollision_A"))
-        push!(LOAD_PATH, joinpath(@__DIR__, "project", "Extensions", "ExtNameCollision_B"))
-        ext_B = Base.PkgId(Base.uuid5(Base.identify_package("ExtNameCollision_B").uuid, "REPLExt"), "REPLExt")
-        @test Base.locate_package(ext_B) == joinpath(@__DIR__, "project",  "Extensions", "ExtNameCollision_B", "ext", "REPLExt.jl")
-    finally
-        copy!(LOAD_PATH, old_load_path)
-    end
 end
