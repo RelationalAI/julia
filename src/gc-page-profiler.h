@@ -24,6 +24,10 @@ typedef struct {
 extern uv_mutex_t page_profile_lock;
 // whether page profiling is enabled
 extern int page_profile_enabled;
+// stream to write page profile to
+extern ios_t *page_profile_stream;
+// stream to write mortality age profile to
+extern ios_t *mortality_age_profile_stream;
 
 // Serializer functions
 gc_page_profiler_serializer_t gc_page_serializer_create(void) JL_NOTSAFEPOINT;

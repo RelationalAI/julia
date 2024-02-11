@@ -1319,6 +1319,22 @@ function take_page_profile(filepath::String)
     return filepath
 end
 
+"""
+    Profile.take_mortality_age_profile(io::IOStream)
+    Profile.take_mortality_age_profile(filepath::String)
+
+Write a per-pool histogram of the ages of objects at mortality in the pool allocator.
+"""
+function take_mortality_age_profile(io::IOStream)
+    Base.@_lock_ios(io, ccall(:jl_gc_take_mortality_age_profile, Cvoid, (Ptr{Cvoid},), io.handle))
+end
+function take_mortality_age_profile(filepath::String)
+    open(filepath, "w") do io
+        take_mortality_age_profile(io)
+    end
+    return filepath
+end
+
 include("Allocs.jl")
 include("heapsnapshot_reassemble.jl")
 include("precompile.jl")

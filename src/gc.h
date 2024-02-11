@@ -180,6 +180,9 @@ typedef struct _jl_gc_pagemeta_t {
     uint16_t fl_end_offset;   // offset of last free object in this page
     uint16_t thread_n;        // thread id of the heap that owns this page
     char *data;
+#ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+    int16_t *ages; // probably fine to use 16-bit counters for this hacky implementation
+#endif
 } jl_gc_pagemeta_t;
 
 extern jl_gc_page_stack_t global_page_pool_lazily_freed;
@@ -269,6 +272,16 @@ typedef struct {
     _Atomic(size_t) n_freed_objs;
     _Atomic(size_t) n_pages_allocd;
 } gc_fragmentation_stat_t;
+
+STATIC_INLINE void gc_record_age_in_pool(jl_gc_pool_t *p, int16_t _age) JL_NOTSAFEPOINT
+{
+    if (_age < 0) {
+        jl_safe_printf("Warning: negative age %d\n", _age);
+        abort();
+    }
+    int16_t age = _age > GC_MAX_RECORDED_AGE ? GC_MAX_RECORDED_AGE : _age;
+    jl_atomic_fetch_add_relaxed(&p->number_of_survivors[age], 1);
+}
 
 #ifdef GC_SMALL_PAGE
 #ifdef _P64

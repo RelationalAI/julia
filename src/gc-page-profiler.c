@@ -12,6 +12,8 @@ int page_profile_enabled;
 size_t page_profile_pages_written;
 // stream to write page profile to
 ios_t *page_profile_stream;
+// stream to write object age profile to
+ios_t *mortality_age_profile_stream;
 // mutex for page profile
 uv_mutex_t page_profile_lock;
 
@@ -163,6 +165,13 @@ JL_DLLEXPORT void jl_gc_take_page_profile(ios_t *stream)
     jl_gc_collect(JL_GC_FULL);
     gc_page_profile_write_json_epilogue(stream);
     gc_disable_page_profile();
+}
+
+JL_DLLEXPORT void jl_gc_take_mortality_age_profile(ios_t *stream)
+{
+    mortality_age_profile_stream = stream;
+    jl_gc_collect(JL_GC_FULL);
+    mortality_age_profile_stream = NULL;
 }
 
 #ifdef __cplusplus

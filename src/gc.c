@@ -1262,6 +1262,12 @@ STATIC_INLINE jl_taggedvalue_t *gc_reset_page(jl_ptls_t ptls2, const jl_gc_pool_
     pg->nold = 0;
     pg->fl_begin_offset = UINT16_MAX;
     pg->fl_end_offset = UINT16_MAX;
+#ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+    pg->ages = (int16_t*)malloc_s(sizeof(int16_t) * GC_PAGE_SZ / p->osize);
+    for (size_t i = 0; i < GC_PAGE_SZ / p->osize; i++) {
+        pg->ages[i] = -1;
+    }
+#endif
     return beg;
 }
 
@@ -1329,6 +1335,9 @@ STATIC_INLINE jl_value_t *jl_gc_pool_alloc_inner(jl_ptls_t ptls, int pool_offset
             pg->has_young = 1;
         }
         msan_allocated_memory(v, osize);
+        jl_gc_pagemeta_t *pg = jl_assume(page_metadata_unsafe(v));
+        size_t obj_idx = ((char*)v - gc_page_data(v) - GC_PAGE_OFFSET) / p->osize;
+        pg->ages[obj_idx] = 0;
         return jl_valueof(v);
     }
     // if the freelist is empty we reuse empty but not freed pages
@@ -1351,6 +1360,9 @@ STATIC_INLINE jl_value_t *jl_gc_pool_alloc_inner(jl_ptls_t ptls, int pool_offset
     }
     p->newpages = next;
     msan_allocated_memory(v, osize);
+    jl_gc_pagemeta_t *pg = jl_assume(page_metadata_unsafe(v));
+    size_t obj_idx = ((char*)v - gc_page_data(v) - GC_PAGE_OFFSET) / p->osize;
+    pg->ages[obj_idx] = 0;
     return jl_valueof(v);
 }
 
@@ -1457,6 +1469,15 @@ static void gc_sweep_page(gc_page_profiler_serializer_t *s, jl_gc_pool_t *p, jl_
     #endif
         nfree = (GC_PAGE_SZ - GC_PAGE_OFFSET) / osize;
         gc_page_profile_write_empty_page(s, page_profile_enabled);
+    #ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+        for (size_t i = 0; i < GC_PAGE_SZ / osize; i++) {
+            int16_t _age = pg->ages[i];
+            if (_age < 0) {
+                continue;
+            }
+            gc_record_age_in_pool(p, _age);
+        }
+    #endif
         goto done;
     }
     // For quick sweep, we might be able to skip the page if the page doesn't
@@ -1467,6 +1488,11 @@ static void gc_sweep_page(gc_page_profiler_serializer_t *s, jl_gc_pool_t *p, jl_
             freedall = 0;
             nfree = pg->nfree;
             gc_page_profile_write_empty_page(s, page_profile_enabled);
+        #ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+            for (size_t i = 0; i < GC_PAGE_SZ / osize; i++) {
+                pg->ages[i]++;
+            }
+        #endif
             goto done;
         }
     }
@@ -1504,6 +1530,17 @@ static void gc_sweep_page(gc_page_profiler_serializer_t *s, jl_gc_pool_t *p, jl_
                 pfl = &v->next;
                 pfl_begin = (pfl_begin != NULL) ? pfl_begin : pfl;
                 pg_nfree++;
+            #ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+                // object died during this sweep
+                if ((char*)v < lim_newpages) {
+                    size_t obj_idx = ((char*)v - data - GC_PAGE_OFFSET) / osize;
+                    int16_t _age = pg->ages[obj_idx];
+                    if (_age >= 0) {
+                        gc_record_age_in_pool(p, pg->ages[obj_idx]);
+                    }
+                    pg->ages[obj_idx] = -1;
+                }
+            #endif
             }
             else { // marked young or old
                 if (current_sweep_full || bits == GC_MARKED) { // old enough
@@ -1512,6 +1549,11 @@ static void gc_sweep_page(gc_page_profiler_serializer_t *s, jl_gc_pool_t *p, jl_
                 prev_nold++;
                 has_marked |= gc_marked(bits);
                 freedall = 0;
+            #ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+                // object survived this sweep
+                size_t obj_idx = ((char*)v - data - GC_PAGE_OFFSET) / osize;
+                pg->ages[obj_idx]++;
+            #endif
             }
             v = (jl_taggedvalue_t*)((char*)v + osize);
         }
@@ -1542,6 +1584,10 @@ done:
     else {
         gc_alloc_map_set(pg->data, GC_PAGE_LAZILY_FREED);
         if (keep_as_local_buffer) {
+        #ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+            free(pg->ages);
+            pg->ages = NULL;
+        #endif
             push_lf_back(buffered, pg);
         }
         else {
@@ -3492,6 +3538,79 @@ JL_DLLEXPORT int64_t jl_gc_live_bytes(void)
 
 size_t jl_maxrss(void);
 
+static void gc_maybe_collect_survival_rates_profile(void)
+{
+#ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+    if (mortality_age_profile_stream != NULL) {
+        JL_STREAM *stream = (JL_STREAM*)mortality_age_profile_stream;
+        // get the survival rate histogram
+        size_t *survival_rate_histogram[2 * JL_GC_N_MAX_POOLS];
+        for (int i = 0; i < 2 * JL_GC_N_MAX_POOLS; i++) {
+            survival_rate_histogram[i] = (size_t *)alloca((GC_MAX_RECORDED_AGE + 1) * sizeof(size_t));
+            memset(survival_rate_histogram[i], 0, (GC_MAX_RECORDED_AGE + 1) * sizeof(size_t));
+        }
+        for (int i = 0; i < gc_n_threads; i++) {
+            jl_ptls_t ptls2 = gc_all_tls_states[i];
+            if (ptls2 == NULL) {
+                continue;
+            }
+            for (int j = 0; j < 2 * JL_GC_N_MAX_POOLS; j++) {
+                jl_gc_pool_t *pool = &ptls2->heap.norm_pools[j];
+                for (int k = 0; k <= GC_MAX_RECORDED_AGE; k++) {
+                    for (int age = 0; age <= k; age++) {
+                        survival_rate_histogram[j][age] += jl_atomic_load_relaxed(&pool->number_of_survivors[k]);
+                    }
+                }
+            }
+        }
+        // don't forget to count live objects as survivors
+        for (int i = 0; i < gc_n_threads; i++) {
+            jl_ptls_t ptls2 = gc_all_tls_states[i];
+            if (ptls2 == NULL) {
+                continue;
+            }
+            jl_gc_pagemeta_t *pg = jl_atomic_load_relaxed(&ptls2->page_metadata_allocd.bottom);
+            while (pg != NULL) {
+                uint8_t pool_n = pg->pool_n;
+                if (pg->ages != NULL) {
+                    for (int j = 0; j < GC_PAGE_SZ / pg->osize; j++) {
+                        int16_t _age = pg->ages[j];
+                        if (_age < 0) {
+                            continue;
+                        }
+                        int16_t age = _age > GC_MAX_RECORDED_AGE ? GC_MAX_RECORDED_AGE : _age;
+                        for (int k = 0; k <= age; k++) {
+                            survival_rate_histogram[pool_n][k]++;
+                        }
+                    }
+                }
+                pg = pg->next;
+            }
+        }
+        // pretty print the survival rate histogram as JSON
+        jl_printf(stream, "{");
+        for (int i = 0; i < 2 * JL_GC_N_MAX_POOLS; i++) {
+            jl_printf(stream, "\"pool_%d\": [", i);
+            for (int j = 0; j <= GC_MAX_RECORDED_AGE; j++) {
+                jl_printf(stream, "%zu", survival_rate_histogram[i][j]);
+                if (j <= GC_MAX_RECORDED_AGE - 1) {
+                    jl_printf(stream, ",");
+                }
+                else {
+                    jl_printf(stream, "");
+                }
+            }
+            jl_printf(stream, "]");
+            if (i < 2 * JL_GC_N_MAX_POOLS - 1) {
+                jl_printf(stream, ",");
+            }
+            jl_printf(stream, "");
+        }
+        jl_printf(stream, "}");
+    }
+#endif
+}
+
 // Only one thread should be running in this function
 static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
 {
@@ -3695,6 +3814,7 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
         gc_sweep_pool();
         if (sweep_full)
             gc_sweep_perm_alloc();
+        gc_maybe_collect_survival_rates_profile();
     }
 
     JL_PROBE_GC_SWEEP_END();
@@ -3933,11 +4053,13 @@ void jl_init_thread_heap(jl_ptls_t ptls)
         p[i].osize = jl_gc_sizeclasses[i];
         p[i].freelist = NULL;
         p[i].newpages = NULL;
+        memset(p->number_of_survivors, 0, sizeof(p->number_of_survivors));
     }
     for (int i = 0; i < JL_GC_N_POOLS; i++) {
         p[i + JL_GC_N_MAX_POOLS].osize = jl_gc_sizeclasses[i];
         p[i + JL_GC_N_MAX_POOLS].freelist = NULL;
         p[i + JL_GC_N_MAX_POOLS].newpages = NULL;
+        memset(p->number_of_survivors, 0, sizeof(p->number_of_survivors));
     }
     small_arraylist_new(&heap->weak_refs, 0);
     small_arraylist_new(&heap->live_tasks, 0);

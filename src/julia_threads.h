@@ -122,10 +122,17 @@ typedef struct {
     uint32_t count;
 } jl_mutex_t;
 
+#define GC_MAX_RECORDED_AGE (1023)
+
+#define GC_ENABLE_SURVIVAL_RATE_PROFILE
+
 typedef struct {
     jl_taggedvalue_t *freelist;   // root of list of free objects
     jl_taggedvalue_t *newpages;   // root of list of chunks of free objects
     uint16_t osize;      // size of objects in this pool
+#ifdef GC_ENABLE_SURVIVAL_RATE_PROFILE
+    _Atomic(size_t) number_of_survivors[GC_MAX_RECORDED_AGE + 1];
+#endif
 } jl_gc_pool_t;
 
 typedef struct {
