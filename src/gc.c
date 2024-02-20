@@ -4188,10 +4188,10 @@ jl_value_t *jl_gc_realloc_string(jl_value_t *s, size_t sz)
     *(size_t*)snew = sz;
 
     // update stats
-	jl_atomic_store_relaxed(&ptls->gc_num.strings_freed_malloc_size,
-		jl_atomic_load_relaxed(&ptls->gc_num.strings_freed_malloc_size) + oldsz);
-	jl_atomic_store_relaxed(&ptls->gc_num.strings_freed_malloc_count,
-		jl_atomic_load_relaxed(&ptls->gc_num.strings_freed_malloc_count) + 1);
+    jl_atomic_store_relaxed(&ptls->gc_num.strings_freed_malloc_size,
+        jl_atomic_load_relaxed(&ptls->gc_num.strings_freed_malloc_size) + oldsz);
+    jl_atomic_store_relaxed(&ptls->gc_num.strings_freed_malloc_count,
+        jl_atomic_load_relaxed(&ptls->gc_num.strings_freed_malloc_count) + 1);
     jl_atomic_store_relaxed(&ptls->gc_num.strings_allocd_malloc_size,
         jl_atomic_load_relaxed(&ptls->gc_num.strings_allocd_malloc_size) + allocsz);
     jl_atomic_store_relaxed(&ptls->gc_num.strings_allocd_malloc_count,
