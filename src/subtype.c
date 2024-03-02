@@ -3027,9 +3027,6 @@ static jl_value_t *finish_unionall(jl_value_t *res JL_MAYBE_UNROOTED, jl_varbind
 static jl_value_t *intersect_unionall_(jl_value_t *t, jl_unionall_t *u, jl_stenv_t *e, int8_t R, int param, jl_varbinding_t *vb)
 {
     jl_varbinding_t *btemp = e->vars;
-    // if the var for this unionall (based on identity) already appears somewhere
-    // in the environment, rename to get a fresh var.
-    // TODO: might need to look inside types in btemp->lb and btemp->ub
     int envsize = 0;
     while (btemp != NULL) {
         envsize++;
@@ -3037,13 +3034,9 @@ static jl_value_t *intersect_unionall_(jl_value_t *t, jl_unionall_t *u, jl_stenv
             vb->limited = 1;
             return t;
         }
-        if (btemp->var == u->var || btemp->lb == (jl_value_t*)u->var ||
-            btemp->ub == (jl_value_t*)u->var) {
-            u = jl_rename_unionall(u);
-            break;
-        }
         btemp = btemp->prev;
     }
+    u = unalias_unionall(u, e);
     JL_GC_PUSH1(&u);
     vb->var = u->var;
     e->vars = vb;
