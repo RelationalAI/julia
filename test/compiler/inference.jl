@@ -5172,3 +5172,27 @@ end) === Union{}
 @test only(Base.Base.return_types() do
     TypeVar(:Issue56248, Any, 1)
 end) === Union{}
+
+# Issue #53366
+#
+# FIXME: This test is quite brittle, since it relies on lowering making a particular
+# (and unnecessary) decision to embed a `SlotNumber` in statement position.
+#
+# This should be re-written to have the bad IR directly, then run type inference +
+# SSA conversion. It should also avoid running `compact!` afterward, since that can
+# mask bugs by cleaning up unused ϕ nodes that should never have existed.
+function issue53366(sc::Threads.Condition)
+    @lock sc begin
+        try
+            if Core.Compiler.inferencebarrier(true)
+                return nothing
+            end
+            return nothing
+        finally
+        end
+    end
+end
+
+let (ir, rt) = only(Base.code_ircode(issue53366, (Threads.Condition,)))
+    Core.Compiler.verify_ir(ir)
+end
