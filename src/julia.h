@@ -1960,6 +1960,9 @@ typedef struct _jl_task_t {
     uint16_t reentrant_timing; // How many times we've reentered timing
     unsigned int copy_stack:31; // sizeof stack for copybuf
     unsigned int started:1;
+
+// cancellation instrumentation:
+    uint64_t instr_last_epoch;
 } jl_task_t;
 
 #define JL_TASK_STATE_RUNNABLE 0

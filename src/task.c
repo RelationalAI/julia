@@ -961,6 +961,10 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
 #ifdef _COMPILER_ASAN_ENABLED_
     t->ctx.asan_fake_stack = NULL;
 #endif
+
+    // Cancellation instrumentation
+    t->instr_last_epoch = 0;
+
     return t;
 }
 
