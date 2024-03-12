@@ -160,11 +160,64 @@ static value_t fl_defined_julia_global(fl_context_t *fl_ctx, value_t *args, uint
     return (b != NULL && jl_atomic_load_relaxed(&b->owner) == b) ? fl_ctx->T : fl_ctx->F;
 }
 
+// used to generate a unique suffix for a given symbol (e.g. variable or type name)
+// first argument contains a stack of method definitions seen so far by `closure-convert` in flisp.
+// if the top of the stack is non-NIL, we use it to augment the suffix so that it becomes
+// of the form $top_level_method_name##$counter, where counter is stored in a per-module
+// side table indexed by top-level method name.
+// this ensures that precompile statements are a bit more stable across different versions
+// of a codebase. see #53719
 static value_t fl_current_module_counter(fl_context_t *fl_ctx, value_t *args, uint32_t nargs) JL_NOTSAFEPOINT
 {
+    argcount(fl_ctx, "current-julia-module-counter", nargs, 1);
     jl_ast_context_t *ctx = jl_ast_ctx(fl_ctx);
-    assert(ctx->module);
-    return fixnum(jl_module_next_counter(ctx->module));
+    jl_module_t *m = ctx->module;
+    assert(m != NULL);
+    // Get the outermost function name from the `parsed_method_stack` top
+    char *funcname = NULL;
+    value_t parsed_method_stack = args[0];
+    if (parsed_method_stack != fl_ctx->NIL) {
+        value_t bottom_stack_symbol = fl_applyn(fl_ctx, 1, symbol_value(symbol(fl_ctx, "last")), parsed_method_stack);
+        funcname = symbol_name(fl_ctx, bottom_stack_symbol);
+    }
+    char buf[(funcname != NULL ? strlen(funcname) : 0) + 20];
+    if (funcname != NULL && funcname[0] != '#') {
+        jl_mutex_lock_nogc(&m->lock);
+        htable_t *mod_table = m->counter_table;
+        if (mod_table == NULL) {
+            mod_table = m->counter_table = htable_new((htable_t *)malloc_s(sizeof(htable_t)), 0);
+        }
+        // try to find the function name in the module's counter table, if it's not found, add it
+        if (ptrhash_get(mod_table, funcname) == HT_NOTFOUND) {
+            ptrhash_put(mod_table, funcname, (void*)((uintptr_t)HT_NOTFOUND + 1));
+        }
+        // counter_table is dropped on serialization, so we need to be conservative
+        // and check the binding table for potential name collisions
+        int name_collision_found = 0;
+        do {
+            uint32_t nxt = ((uint32_t)(uintptr_t)ptrhash_get(mod_table, funcname) - (uintptr_t)HT_NOTFOUND - 1);
+            snprintf(buf, sizeof(buf), "%s##%d", funcname, nxt);
+            ptrhash_put(mod_table, funcname, (void*)(nxt + (uintptr_t)HT_NOTFOUND + 1 + 1));
+            // Check if the counter is already in use
+            name_collision_found = 0;
+            jl_svec_t *t = jl_atomic_load_relaxed(&m->bindings);
+            for (size_t i = 0; i < jl_svec_len(t); i++) {
+                jl_binding_t *b = (jl_binding_t*)jl_svecref(t, i);
+                if ((void*)b == jl_nothing) {
+                    continue;
+                }
+                if (strstr(jl_symbol_name(b->globalref->name), buf)) {
+                    name_collision_found = 1;
+                    break;
+                }
+            }
+        } while (name_collision_found);
+        jl_mutex_unlock_nogc(&m->lock);
+    }
+    else {
+        snprintf(buf, sizeof(buf), "%d", jl_module_next_counter(ctx->module));
+    }
+    return symbol(fl_ctx, buf);
 }
 
 static value_t fl_julia_current_file(fl_context_t *fl_ctx, value_t *args, uint32_t nargs) JL_NOTSAFEPOINT

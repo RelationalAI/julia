@@ -50,6 +50,7 @@ JL_DLLEXPORT jl_module_t *jl_new_module_(jl_sym_t *name, jl_module_t *parent, ui
         jl_set_const(m, name, (jl_value_t*)m);
     }
     jl_module_export(m, name);
+    m->counter_table = NULL;
     JL_GC_POP();
     return m;
 }

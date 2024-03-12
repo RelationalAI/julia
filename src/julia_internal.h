@@ -13,6 +13,8 @@
 #include "support/strtod.h"
 #include "gc-alloc-profiler.h"
 #include "support/rle.h"
+#include <ctype.h>
+#include <stdint.h>
 #include <uv.h>
 #include <llvm-c/Types.h>
 #include <llvm-c/Orc.h>
@@ -848,6 +850,14 @@ JL_DLLEXPORT jl_value_t *jl_as_global_root(jl_value_t *val JL_MAYBE_UNROOTED);
 jl_opaque_closure_t *jl_new_opaque_closure(jl_tupletype_t *argt, jl_value_t *rt_lb, jl_value_t *rt_ub,
     jl_value_t *source,  jl_value_t **env, size_t nenv, int do_compile);
 JL_DLLEXPORT int jl_is_valid_oc_argtype(jl_tupletype_t *argt, jl_method_t *source);
+
+STATIC_INLINE int is_anonfn_typename(char *name) JL_NOTSAFEPOINT
+{
+    if (name[0] != '#' || name[1] == '#')
+        return 0;
+    char *other = strrchr(name, '#');
+    return other > &name[1] && isdigit(other[1]);
+}
 
 // Each tuple can exist in one of 4 Vararg states:
 //   NONE: no vararg                            Tuple{Int,Float32}
