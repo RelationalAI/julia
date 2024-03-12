@@ -16,8 +16,8 @@ extern "C" {
 
 static uint64_t g_min_update_interval = 0;
 static uint64_t get_min_update_interval() {
-    // this is inherently thread-safe, but that's okay as we're only interested on a rough estimate
-    // for how many clock cycles correspond to 1 second, more or less.
+    // this is inherently not thread-safe, but that's okay as we're only interested on a rough estimate
+    // of how many clock cycles correspond to 1 second.
     if (g_min_update_interval == 0) {
         // sleep can be interrupted by a signal before the expected sleep time. In this case it will
         // return with a value != 0 and we repeat the measurement.
@@ -32,7 +32,7 @@ static uint64_t get_min_update_interval() {
     return g_min_update_interval;
 }
 
-JL_DLLEXPORT bool update_epoch(bool force) {
+JL_DLLEXPORT bool jl_update_epoch(bool force) {
     jl_task_t *task = jl_current_task;
     uint64_t t0 = task->instr_last_epoch;
     uint64_t t1 = cycleclock();
