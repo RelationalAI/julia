@@ -3710,6 +3710,8 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
 
 JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
 {
+    jl_ccinstr_record_all_backtraces(0);
+
     JL_PROBE_GC_BEGIN(collection);
 
     jl_task_t *ct = jl_current_task;
@@ -3759,7 +3761,6 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     gc_num.time_to_safepoint = duration;
     gc_num.total_time_to_safepoint += duration;
 
-    jl_ccinstr_record_all_backtraces(0);
     gc_invoke_callbacks(jl_gc_cb_pre_gc_t,
         gc_cblist_pre_gc, (collection));
 

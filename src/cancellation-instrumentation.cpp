@@ -10,6 +10,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <mutex>
 #include <unistd.h>
 #include <vector>
 
@@ -153,6 +154,7 @@ JL_DLLEXPORT bool jl_ccinstr_record_cancellation_point(jl_value_t* abstract_canc
     }
 
     // reset the captured backtraces and insert the current one
+    //cout << "[jl_ccinstr_record_cancellation_point] task: " << task << ", t0: " << t0 << ", t1: " << t1 << ", diff: " << (t1 - t0) << endl;
     ccinstr_clear_backtraces(task);
     ccinstr_append_backtrace();
     return false;
@@ -191,7 +193,10 @@ JL_DLLEXPORT void jl_ccinstr_record_backtrace_for_task(jl_task_t* task, bool for
 
 // based on jl_print_task_backtraces
 extern int gc_first_tid;
+static mutex g_mutex;
 JL_DLLEXPORT void jl_ccinstr_record_all_backtraces(int /* bool, int for compatibility with C */ force){
+    lock_guard<mutex> lock(g_mutex);
+
     size_t nthreads = jl_atomic_load_acquire(&jl_n_threads);
     jl_ptls_t *allstates = jl_atomic_load_relaxed(&jl_all_tls_states);
     for (size_t i = 0; i < nthreads; i++) {
