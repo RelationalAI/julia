@@ -11,11 +11,6 @@
 using std::string;
 using std::vector;
 
-struct jl_raw_backtrace_t {
-    jl_bt_element_t *data;
-    size_t size;
-};
-
 struct jl_raw_alloc_t {
     jl_datatype_t *type_address;
     jl_raw_backtrace_t backtrace;

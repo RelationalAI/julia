@@ -1961,8 +1961,7 @@ typedef struct _jl_task_t {
     unsigned int copy_stack:31; // sizeof stack for copybuf
     unsigned int started:1;
 
-// cancellation instrumentation:
-    uint64_t instr_last_epoch;
+    void* cc_instrumentation; // opaque handle for cancellation instrumentation
 } jl_task_t;
 
 #define JL_TASK_STATE_RUNNABLE 0

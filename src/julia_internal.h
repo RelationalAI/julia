@@ -1501,6 +1501,13 @@ struct typemap_intersection_env {
 };
 int jl_typemap_intersection_visitor(jl_typemap_t *a, int offs, struct typemap_intersection_env *closure);
 
+// gc-alloc-profiler.cpp
+
+struct jl_raw_backtrace_t {
+    jl_bt_element_t *data;
+    size_t size;
+};
+
 // -- simplevector.c -- //
 
 // For codegen only.

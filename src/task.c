@@ -41,6 +41,10 @@
 extern "C" {
 #endif
 
+// cancellation instrumentation prototypes
+extern void ccinstr_initialize_task(jl_task_t* task);
+extern void ccinstr_finalize_task(jl_task_t* task);
+
 #if defined(_COMPILER_ASAN_ENABLED_)
 static inline void sanitizer_start_switch_fiber(jl_ptls_t ptls, jl_task_t *from, jl_task_t *to) {
     if (to->copy_stack)
@@ -292,6 +296,8 @@ static _Atomic(jl_function_t*) task_done_hook_func JL_GLOBALLY_ROOTED = NULL;
 
 void JL_NORETURN jl_finish_task(jl_task_t *t)
 {
+    ccinstr_finalize_task(t);
+
     jl_task_t *ct = jl_current_task;
     JL_PROBE_RT_FINISH_TASK(ct);
     JL_SIGATOMIC_BEGIN();
@@ -962,8 +968,7 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
     t->ctx.asan_fake_stack = NULL;
 #endif
 
-    // Cancellation instrumentation
-    t->instr_last_epoch = 0;
+    ccinstr_initialize_task(t); // cancellation instrumentation
 
     return t;
 }

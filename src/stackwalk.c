@@ -865,7 +865,7 @@ _os_ptr_munge(uintptr_t ptr)
 
 extern bt_context_t *jl_to_bt_context(void *sigctx);
 
-static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
+void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
 {
     jl_task_t *ct = jl_current_task;
     jl_ptls_t ptls = ct->ptls;

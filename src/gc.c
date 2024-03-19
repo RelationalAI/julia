@@ -12,6 +12,9 @@
 extern "C" {
 #endif
 
+// CC instrumentation
+extern void jl_ccinstr_record_all_backtraces(int force);
+
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
 // Number of threads sweeping
@@ -3756,6 +3759,7 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     gc_num.time_to_safepoint = duration;
     gc_num.total_time_to_safepoint += duration;
 
+    jl_ccinstr_record_all_backtraces(0);
     gc_invoke_callbacks(jl_gc_cb_pre_gc_t,
         gc_cblist_pre_gc, (collection));
 
