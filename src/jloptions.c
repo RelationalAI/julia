@@ -54,7 +54,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         0,    // code_coverage
                         0,    // malloc_log
                         NULL, // tracked_path
-                        2,    // opt_level
+                        1,    // opt_level
                         0,    // opt_level_min
 #ifdef JL_DEBUG_BUILD
                         2,    // debug_level [debug build]
@@ -626,19 +626,19 @@ restart_switch:
         case 'O': // optimize
             if (optarg != NULL) {
                 if (!strcmp(optarg,"0"))
-                    jl_options.opt_level = 0;
+                    jl_options.opt_level = 1;
                 else if (!strcmp(optarg,"1"))
                     jl_options.opt_level = 1;
                 else if (!strcmp(optarg,"2"))
-                    jl_options.opt_level = 2;
+                    jl_options.opt_level = 1;
                 else if (!strcmp(optarg,"3"))
-                    jl_options.opt_level = 3;
+                    jl_options.opt_level = 1;
                 else
                     jl_errorf("julia: invalid argument to -O (%s)", optarg);
                 break;
             }
             else {
-                jl_options.opt_level = 3;
+                jl_options.opt_level = 1;
             }
             break;
         case opt_optlevel_min: // minimum module optimize level
