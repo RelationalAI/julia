@@ -693,10 +693,39 @@ JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
     va_end(args);
 
     buf[999] = '\0';
+    // Our telemetry on SPCS expects a JSON object per line
+    const char *json_preamble = "\n{\"level\":\"Error\", \"message\":\"";
+    const char *json_postamble = "\"}\n";
     if (jl_inside_signal_handler() && jl_sig_fd != 0) {
-        if (write(jl_sig_fd, buf, strlen(buf)) < 0) {
-            // nothing we can do; ignore the failure
+        // Ignore write failures because there is nothing we can do
+        write(jl_sig_fd, json_preamble, strlen(json_preamble));
+        // JSON escape the input string
+        for(size_t i = 0; i < strlen(buf); i += 1) {
+            switch (buf[i]) {
+                case '"':
+                    write(jl_sig_fd, "\\\"", 2);
+                    break;
+                case '\b':
+                    write(jl_sig_fd, "\\b", 2);
+                    break;
+                case '\n':
+                    write(jl_sig_fd, "\\n", 2);
+                    break;
+                case '\r':
+                    write(jl_sig_fd, "\\r", 2);
+                    break;
+                case '\t':
+                    write(jl_sig_fd, "\\t", 2);
+                    break;
+                case '\\':
+                    write(jl_sig_fd, "\\\\", 2);
+                    break;
+                default:
+                    write(jl_sig_fd, buf + i, 1);
+            }
         }
+        write(jl_sig_fd, json_postamble, strlen(json_postamble));
+        fdatasync(jl_sig_fd);
     }
     else {
         if (write(STDERR_FILENO, buf, strlen(buf)) < 0) {
