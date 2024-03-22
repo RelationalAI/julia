@@ -702,7 +702,6 @@ JL_CALLABLE(jl_f_opaque_closure_call);
 void jl_install_default_signal_handlers(void);
 void restore_signals(void);
 void jl_install_thread_signal_handler(jl_ptls_t ptls);
-extern void *signal_stack;
 extern size_t sig_stack_size;
 STATIC_INLINE int is_addr_on_sigstack(jl_ptls_t ptls, void *ptr)
 {
@@ -712,10 +711,14 @@ STATIC_INLINE int is_addr_on_sigstack(jl_ptls_t ptls, void *ptr)
 }
 STATIC_INLINE int jl_inside_signal_handler(void)
 {
-#if defined(_OS_LINUX_) && defined(_CPU_X86_64_)
+#if (defined(_OS_LINUX_) && defined(_CPU_X86_64_)) || (defined(_OS_DARWIN_) && defined(_CPU_AARCH64_))
     // Read the stack pointer
     size_t sp;
+#if defined(_OS_LINUX_) && defined(_CPU_X86_64_)
     __asm__ __volatile__("movq %%rsp, %0" : "=r"(sp));
+#elif defined(_OS_DARWIN_) && defined(_CPU_AARCH64_)
+    __asm__ __volatile__("mov %0, sp" : "=r"(sp));
+#endif
     // Check if the stack pointer is within the signal stack
     jl_ptls_t ptls = jl_current_task->ptls;
     return is_addr_on_sigstack(ptls, (void*)sp);
