@@ -38,7 +38,7 @@
 // 8M signal stack, same as default stack size and enough
 // for reasonable finalizers.
 // Should also be enough for parallel GC when we have it =)
-size_t sig_stack_size = (8 * 1024 * 1024);
+const size_t sig_stack_size = (8 * 1024 * 1024);
 
 #include "julia_assert.h"
 
