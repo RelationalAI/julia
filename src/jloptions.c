@@ -163,6 +163,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         0, // gc_sweep_always_full
                         0, // compress_sysimage
                         0, // alert_on_critical_error
+                        NULL, // safe_crash_log_file
     };
     jl_options_initialized = 1;
 }
@@ -416,6 +417,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_trace_eval,
            opt_experimental_features,
            opt_compress_sysimage,
+           opt_safe_crash_log_file,
     };
     static const char* const shortopts = "+vhqH:e:E:L:J:C:it:p:O:g:m:";
     static const struct option longopts[] = {
@@ -489,6 +491,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "trim",  optional_argument, 0, opt_trim },
         { "compress-sysimage", required_argument, 0, opt_compress_sysimage },
         { "trace-eval",       optional_argument, 0, opt_trace_eval },
+        { "safe-crash-log-file",   required_argument, 0, opt_safe_crash_log_file },
         { 0, 0, 0, 0 }
     };
 
@@ -1088,6 +1091,11 @@ restart_switch:
                 jl_options.task_metrics = JL_OPTIONS_TASK_METRICS_ON;
             else
                 jl_errorf("julia: invalid argument to --task-metrics={yes|no} (%s)", optarg);
+            break;
+        case opt_safe_crash_log_file:
+            jl_options.safe_crash_log_file = strdup(optarg);
+            if (jl_options.safe_crash_log_file == NULL)
+                jl_error("julia: failed to allocate memory for --safe-crash-log-file");
             break;
         case opt_compress_sysimage:
             if (!strcmp(optarg,"yes"))

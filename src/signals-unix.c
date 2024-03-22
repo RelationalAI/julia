@@ -42,7 +42,7 @@
 #endif
 
 // 8M signal stack, same as default stack size (though we barely use this)
-static const size_t sig_stack_size = 8 * 1024 * 1024;
+const size_t sig_stack_size = 8 * 1024 * 1024;
 
 #include "julia_assert.h"
 
