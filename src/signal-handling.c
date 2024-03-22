@@ -28,6 +28,10 @@ static const    uint64_t GIGA = 1000000000ULL;
 // Timers to take samples at intervals
 JL_DLLEXPORT void jl_profile_stop_timer(void);
 JL_DLLEXPORT int jl_profile_start_timer(void);
+// Signal stack
+void *signal_stack = NULL;
+// File-descriptor for safe logging on signal handling
+int jl_sig_fd;
 
 ///////////////////////
 // Utility functions //

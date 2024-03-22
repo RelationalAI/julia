@@ -693,8 +693,15 @@ JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
     va_end(args);
 
     buf[999] = '\0';
-    if (write(STDERR_FILENO, buf, strlen(buf)) < 0) {
-        // nothing we can do; ignore the failure
+    if (jl_inside_signal_handler() && jl_sig_fd != 0) {
+        if (write(jl_sig_fd, buf, strlen(buf)) < 0) {
+            // nothing we can do; ignore the failure
+        }
+    }
+    else {
+        if (write(STDERR_FILENO, buf, strlen(buf)) < 0) {
+            // nothing we can do; ignore the failure
+        }
     }
 #ifdef _OS_WINDOWS_
     SetLastError(last_error);
