@@ -825,7 +825,7 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
 
 #if defined(_OS_LINUX_) && defined(_CPU_X86_64_)
     if (jl_options.safe_crash_log_file != NULL) {
-        jl_sig_fd = open(jl_options.safe_crash_log_file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        jl_sig_fd = open(jl_options.safe_crash_log_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
         if (jl_sig_fd == -1) {
             jl_error("fatal error: could not open safe crash log file for writing");
         }
