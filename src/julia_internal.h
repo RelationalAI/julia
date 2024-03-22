@@ -702,7 +702,7 @@ JL_CALLABLE(jl_f_opaque_closure_call);
 void jl_install_default_signal_handlers(void);
 void restore_signals(void);
 void jl_install_thread_signal_handler(jl_ptls_t ptls);
-extern size_t sig_stack_size;
+extern const size_t sig_stack_size;
 STATIC_INLINE int is_addr_on_sigstack(jl_ptls_t ptls, void *ptr)
 {
     // One guard page for signal_stack.
