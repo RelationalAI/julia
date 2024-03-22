@@ -705,7 +705,7 @@ JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
     // Format time
     int offset = strftime(timestamp_buffer, 25, "%Y-%m-%dT%H:%M:%S", tm_info);
     // Append milliseconds
-    snprintf(timestamp_buffer + offset, 25, ".%03ld", tv.tv_usec / 1000);
+    snprintf(timestamp_buffer + offset, 25, ".%03d", tv.tv_usec / 1000);
 
     const char *json_preamble_p1 = "\n{\"level\":\"Error\", \"timestamp\":\"";
     const char *json_preamble_p2 = "\", \"message\": \"";

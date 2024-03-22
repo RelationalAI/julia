@@ -633,7 +633,7 @@ static void *alloc_sigstack(size_t *ssize)
 void jl_install_thread_signal_handler(jl_ptls_t ptls)
 {
     size_t ssize = sig_stack_size;
-    signal_stack = alloc_sigstack(&ssize);
+    void *signal_stack = alloc_sigstack(&ssize);
     ptls->signal_stack = signal_stack;
     stack_t ss;
     ss.ss_flags = 0;
