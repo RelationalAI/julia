@@ -747,10 +747,8 @@ JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
     if (jl_inside_signal_handler() && jl_sig_fd != 0) {
         print_error_msg_as_json(buf);
     }
-    else {
-        if (write(STDERR_FILENO, buf, strlen(buf)) < 0) {
-            // nothing we can do; ignore the failure
-        }
+    if (write(STDERR_FILENO, buf, strlen(buf)) < 0) {
+        // nothing we can do; ignore the failure
     }
 #ifdef _OS_WINDOWS_
     SetLastError(last_error);
