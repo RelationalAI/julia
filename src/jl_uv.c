@@ -15,6 +15,7 @@
 #include "errno.h"
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #endif
 
 #include "julia.h"
@@ -694,11 +695,26 @@ JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
 
     buf[999] = '\0';
     // Our telemetry on SPCS expects a JSON object per line
-    const char *json_preamble = "\n{\"level\":\"Error\", \"message\":\"";
+    // The following lines prepare the timestamp string and the JSON object
+    struct timeval tv;
+    struct tm* tm_info;
+    char timestamp_buffer[50];
+    // Get current time
+    gettimeofday(&tv, NULL);
+    tm_info = gmtime(&tv.tv_sec);
+    // Format time
+    int offset = strftime(timestamp_buffer, 25, "%Y-%m-%dT%H:%M:%S", tm_info);
+    // Append milliseconds
+    snprintf(timestamp_buffer + offset, 25, ".%03ld", tv.tv_usec / 1000);
+
+    const char *json_preamble_p1 = "\n{\"level\":\"Error\", \"timestamp\":\"";
+    const char *json_preamble_p2 = ", \"message\": \"";
     const char *json_postamble = "\"}\n";
     if (jl_inside_signal_handler() && jl_sig_fd != 0) {
         // Ignore write failures because there is nothing we can do
-        write(jl_sig_fd, json_preamble, strlen(json_preamble));
+        write(jl_sig_fd, json_preamble_p1, strlen(json_preamble_p1));
+        write(jl_sig_fd, timestamp_buffer, strlen(timestamp_buffer));
+        write(jl_sig_fd, json_preamble_p2, strlen(json_preamble_p2));
         // JSON escape the input string
         for(size_t i = 0; i < strlen(buf); i += 1) {
             switch (buf[i]) {
