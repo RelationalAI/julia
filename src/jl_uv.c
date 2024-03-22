@@ -708,7 +708,7 @@ JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
     snprintf(timestamp_buffer + offset, 25, ".%03ld", tv.tv_usec / 1000);
 
     const char *json_preamble_p1 = "\n{\"level\":\"Error\", \"timestamp\":\"";
-    const char *json_preamble_p2 = ", \"message\": \"";
+    const char *json_preamble_p2 = "\", \"message\": \"";
     const char *json_postamble = "\"}\n";
     if (jl_inside_signal_handler() && jl_sig_fd != 0) {
         // Ignore write failures because there is nothing we can do
