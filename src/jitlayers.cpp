@@ -4,6 +4,7 @@
 #include "platform.h"
 #include <stdint.h>
 #include <sstream>
+#include <filesystem>
 
 #include "llvm/IR/Mangler.h"
 #include <llvm/ADT/Statistic.h>
@@ -115,6 +116,11 @@ static void *getTLSAddress(void *control)
 }
 }
 #endif
+
+inline bool file_exists (const std::string& name) {
+    struct stat buffer;
+    return (stat (name.c_str(), &buffer) == 0);
+}
 
 // Snooping on which functions are being compiled, and how long it takes
 extern "C" JL_DLLEXPORT_CODEGEN
@@ -1300,6 +1306,71 @@ namespace {
             : orc::IRCompileLayer::IRCompiler(MO), TMs(TMCreator(TM, optlevel)) {}
 
         Expected<std::unique_ptr<MemoryBuffer>> operator()(Module &M) override {
+            // Checks if the hash flag exists
+            auto metadata = M.getModuleFlag("hash");
+            if (metadata) {
+                if (auto *meta = dyn_cast<MDString>(metadata)) {
+                    // If true, checks if we aready cached the .so to disk
+                    std::string filename = "/tmp/mod_" + std::string(meta->getString()) + ".so";
+                    if (!file_exists(filename)) {
+                        // If we did not cache, compile the module
+                        auto buffer_or_err = orc::SimpleCompiler(***TMs)(M);
+
+                        if (auto m = M.getModuleFlag("time")) {
+                            if (auto *timeref = dyn_cast<MDString>(m)) {
+                                long long past_us = std::stoll(std::string(timeref->getString()));
+                                auto now = std::chrono::high_resolution_clock::now();
+                                auto epoch = now.time_since_epoch();
+                                long long us = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
+
+                                errs() << "Full LLVM Time (us): " << us - past_us << "us\n";
+                            }
+                        }
+                        if (!buffer_or_err) {
+                            return buffer_or_err;
+                        }
+
+                        // And write the .so to disk
+                        auto buffer = std::move(buffer_or_err.get());
+                        std::error_code ec;
+                        raw_fd_ostream ofos(filename, ec, sys::fs::OF_None);
+                        if (ec) {
+                            report_fatal_error(Twine("Can't open output '") + filename + "'\n");
+                        }
+                        ofos << buffer->getBuffer();
+                        ofos.close();
+                        errs() << "wrote objectfile to: " << filename << "\n";
+
+                        return buffer;
+                    } else {
+                        // If we already cached, load the module
+                        auto mem_buf = MemoryBuffer::getFile(filename, false, false, false);
+
+                        if (std::error_code ec = mem_buf.getError()) {
+                            errs() << "failed to read file" << "\n";
+                            // FIXME this is bad
+                            return orc::SimpleCompiler(***TMs)(M);
+                        }
+
+                        if (auto m = M.getModuleFlag("time")) {
+                            if (auto *timeref = dyn_cast<MDString>(m)) {
+                                long long past_us = std::stoll(std::string(timeref->getString()));
+                                auto now = std::chrono::high_resolution_clock::now();
+                                auto epoch = now.time_since_epoch();
+                                long long us = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
+
+                                errs() << "Retrieval Time (us): " << us - past_us << "us\n";
+                            }
+                        }
+
+                        // And return the loaded the module
+                        return std::move(mem_buf.get());
+                    }
+                }
+            } else {
+                errs() << "no hash found, ignoring module\n";
+            }
+
             return orc::SimpleCompiler(***TMs)(M);
         }
 
@@ -1783,6 +1854,12 @@ void jl_merge_module(orc::ThreadSafeModule &destTSM, orc::ThreadSafeModule srcTS
             assert(&dest.getContext() == &src.getContext() && "Cannot merge modules with different contexts!");
             assert(dest.getDataLayout() == src.getDataLayout() && "Cannot merge modules with different data layouts!");
             assert(dest.getTargetTriple() == src.getTargetTriple() && "Cannot merge modules with different target triples!");
+
+            auto merged = dest.getModuleFlag("merged");
+            if (!merged) {
+                // Flags this module as merged to be able to ignore it later
+                dest.addModuleFlag(Module::ModFlagBehavior::Override, "merged", MDString::get(dest.getContext(), "true"));
+            }
 
             for (Module::global_iterator I = src.global_begin(), E = src.global_end(); I != E;) {
                 GlobalVariable *sG = &*I;

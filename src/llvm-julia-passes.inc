@@ -1,6 +1,7 @@
 //Module passes
 #ifdef MODULE_PASS
 MODULE_PASS("CPUFeatures", CPUFeaturesPass, CPUFeaturesPass())
+MODULE_PASS("ModuleHashCheck", ModuleHashCheckPass, ModuleHashCheckPass())
 MODULE_PASS("RemoveNI", RemoveNIPass, RemoveNIPass())
 MODULE_PASS("FinalLowerGC", FinalLowerGCPass, FinalLowerGCPass())
 MODULE_PASS("JuliaMultiVersioning", MultiVersioningPass, MultiVersioningPass())

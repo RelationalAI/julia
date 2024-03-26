@@ -1790,6 +1790,7 @@ void addOptimizationPasses(legacy::PassManagerBase *PM, int opt_level,
                            bool lower_intrinsics, bool dump_native,
                            bool external_use)
 {
+    PM->add(createModuleHashCheckPass());
     // Note: LLVM 12 disabled the hoisting of common instruction
     //       before loop vectorization (https://reviews.llvm.org/D84108).
     //

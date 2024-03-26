@@ -558,6 +558,7 @@ static void buildCleanupPipeline(ModulePassManager &MPM, PassBuilder *PB, Optimi
 
 static void buildPipeline(ModulePassManager &MPM, PassBuilder *PB, OptimizationLevel O, const OptimizationOptions &options) JL_NOTSAFEPOINT {
     MPM.addPass(BeforeOptimizationMarkerPass());
+    JULIA_PASS(MPM.addPass(ModuleHashCheckPass()));
     buildEarlySimplificationPipeline(MPM, PB, O, options);
     MPM.addPass(AlwaysInlinerPass());
     buildEarlyOptimizerPipeline(MPM, PB, O, options);

@@ -52,6 +52,11 @@ struct CPUFeaturesPass : PassInfoMixin<CPUFeaturesPass> {
     static bool isRequired() { return true; }
 };
 
+struct ModuleHashCheckPass : PassInfoMixin<ModuleHashCheckPass> {
+    PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) JL_NOTSAFEPOINT;
+    static bool isRequired() { return true; }
+};
+
 struct RemoveNIPass : PassInfoMixin<RemoveNIPass> {
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) JL_NOTSAFEPOINT;
     static bool isRequired() { return true; }

@@ -645,6 +645,7 @@ Pass *createMultiVersioningPass(bool external_use) JL_NOTSAFEPOINT;
 Pass *createAllocOptPass() JL_NOTSAFEPOINT;
 Pass *createDemoteFloat16Pass() JL_NOTSAFEPOINT;
 Pass *createCPUFeaturesPass() JL_NOTSAFEPOINT;
+Pass *createModuleHashCheckPass() JL_NOTSAFEPOINT;
 Pass *createLowerSimdLoopPass() JL_NOTSAFEPOINT;
 
 // NewPM
