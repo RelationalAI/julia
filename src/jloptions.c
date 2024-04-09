@@ -54,7 +54,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         0,    // code_coverage
                         0,    // malloc_log
                         NULL, // tracked_path
-                        2,    // opt_level
+                        1,    // opt_level
                         0,    // opt_level_min
 #ifdef JL_DEBUG_BUILD
                         2,    // debug_level [debug build]
