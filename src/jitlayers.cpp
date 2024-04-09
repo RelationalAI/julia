@@ -678,7 +678,7 @@ CodeGenOpt::Level CodeGenOptLevelFor(int optlevel)
     return CodeGenOpt::None;
 #else
     return optlevel < 2 ? CodeGenOpt::None :
-        optlevel == 2 ? CodeGenOpt::Default :
+        optlevel == 2 ? CodeGenOpt::Less :
         CodeGenOpt::Aggressive;
 #endif
 }
