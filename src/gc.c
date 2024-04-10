@@ -934,12 +934,7 @@ void gc_setmark_buf(jl_ptls_t ptls, void *o, uint8_t mark_mode, size_t minsz) JL
 
 STATIC_INLINE void maybe_collect(jl_ptls_t ptls)
 {
-    if (jl_atomic_load_relaxed(&ptls->gc_num.allocd) >= 0 || jl_gc_debug_check_other()) {
-        jl_gc_collect(JL_GC_AUTO);
-    }
-    else {
-        jl_gc_safepoint_(ptls);
-    }
+    jl_gc_safepoint_(ptls);
 }
 
 // weak references
