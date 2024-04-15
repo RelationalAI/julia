@@ -167,6 +167,7 @@
     XX(jl_gc_counted_realloc_with_old_size) \
     XX(jl_gc_diff_total_bytes) \
     XX(jl_gc_enable) \
+    XX(jl_gc_enable_auto) \
     XX(jl_gc_enable_conservative_gc_support) \
     XX(jl_gc_enable_finalizers) \
     XX(jl_gc_external_obj_hdr_size) \

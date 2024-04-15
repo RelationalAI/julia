@@ -983,6 +983,7 @@ extern void JL_GC_POP() JL_NOTSAFEPOINT;
 #endif
 
 JL_DLLEXPORT int jl_gc_enable(int on);
+JL_DLLEXPORT int jl_gc_enable_auto(int on);
 JL_DLLEXPORT int jl_gc_is_enabled(void);
 
 typedef enum {

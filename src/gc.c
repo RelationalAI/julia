@@ -932,9 +932,17 @@ void gc_setmark_buf(jl_ptls_t ptls, void *o, uint8_t mark_mode, size_t minsz) JL
     gc_setmark_buf_(ptls, o, mark_mode, minsz);
 }
 
+_Atomic(uint32_t) jl_gc_disable_auto_counter = 0;
+
 STATIC_INLINE void maybe_collect(jl_ptls_t ptls)
 {
-    jl_gc_safepoint_(ptls);
+    int disable_auto = jl_atomic_load_relaxed(&jl_gc_disable_auto_counter);
+    if ((disable_auto == 0) && (jl_atomic_load_relaxed(&ptls->gc_num.allocd) >= 0 || jl_gc_debug_check_other())) {
+        jl_gc_collect(JL_GC_AUTO);
+    }
+    else {
+        jl_gc_safepoint_(ptls);
+    }
 }
 
 // weak references
@@ -3347,6 +3355,12 @@ JL_DLLEXPORT int jl_gc_is_enabled(void)
 {
     jl_ptls_t ptls = jl_current_task->ptls;
     return !ptls->disable_gc;
+}
+
+JL_DLLEXPORT int jl_gc_enable_auto(int on)
+{
+    jl_atomic_fetch_add(&jl_gc_disable_auto_counter, on ? -1 : 1);
+    return 0;
 }
 
 JL_DLLEXPORT void jl_gc_get_total_bytes(int64_t *bytes) JL_NOTSAFEPOINT
