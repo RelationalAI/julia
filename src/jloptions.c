@@ -56,11 +56,8 @@ JL_DLLEXPORT void jl_init_options(void)
                         NULL, // tracked_path
                         2,    // opt_level
                         0,    // opt_level_min
-#ifdef JL_DEBUG_BUILD
-                        2,    // debug_level [debug build]
-#else
-                        1,    // debug_level [release build]
-#endif
+                        2,    // debug_level
+
                         JL_OPTIONS_CHECK_BOUNDS_DEFAULT, // check_bounds
                         JL_OPTIONS_DEPWARN_OFF,    // deprecation warning
                         0,    // method overwrite warning
@@ -157,7 +154,7 @@ static const char opts[]  =
 #ifdef JL_DEBUG_BUILD
         " -g, --debug-info=[{0,1,2*}] Set the level of debug info generation in the julia-debug build ($)\n"
 #else
-        " -g, --debug-info=[{0,1*,2}] Set the level of debug info generation (level 2 if `-g` is used without a level) ($)\n"
+        " -g, --debug-info=[{0,1,2*}] Set the level of debug info generation (level 2 if `-g` is used without a level) ($)\n"
 #endif
     " --inline={yes*|no}         Control whether inlining is permitted, including overriding @inline declarations\n"
     " --check-bounds={yes|no|auto*}\n"
