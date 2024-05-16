@@ -2478,15 +2478,49 @@ JL_DLLEXPORT void jl_coverage_alloc_line(StringRef filename, int line);
 JL_DLLEXPORT uint64_t *jl_coverage_data_pointer(StringRef filename, int line);
 JL_DLLEXPORT uint64_t *jl_malloc_data_pointer(StringRef filename, int line);
 
+thread_local uint64_t AA_NOOP[1024];
+
 static void visitLine(jl_codectx_t &ctx, uint64_t *ptr, Value *addend, const char *name)
 {
+    uint64_t idx = ((uintptr_t)ptr) & 1023;
+    Value *AllocaAsInt64 = ConstantInt::get(ctx.types().T_size, (uintptr_t)&AA_NOOP[idx], "thread_local_ptr");
+
+    Value *ptr_as_integer = ConstantInt::get(ctx.types().T_size, (uintptr_t)ptr, "line_ptr");
+
     Value *pv = ConstantExpr::getIntToPtr(
         ConstantInt::get(ctx.types().T_size, (uintptr_t)ptr),
         getInt64PtrTy(ctx.builder.getContext()));
+
+    // Load the value from the pointer
     Value *v = ctx.builder.CreateLoad(getInt64Ty(ctx.builder.getContext()), pv, true, name);
-    v = ctx.builder.CreateAdd(v, addend);
-    // ctx.builder.CreateStore(v, pv, true); // volatile, not atomic, so this might be an underestimate,
-                                          // but it's faster this way
+
+    // Compare the loaded value to zero
+    Value *is_equal_zero = ctx.builder.CreateICmpEQ(
+        v, ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 0));
+
+    // Create the 64-bit integer with all bits set to 1 (i.e., 0xFFFFFFFFFFFFFFFF)
+    Value* all_ones = ConstantInt::get(Type::getInt64Ty(ctx.builder.getContext()), -1, true);
+
+    // Create the select instruction
+    Value* condition_as_int = ctx.builder.CreateSelect(is_equal_zero, all_ones, ConstantInt::get(Type::getInt64Ty(ctx.builder.getContext()), 0), "select");
+
+    // Compute the new value to be stored if the condition is met
+    Value *new_value = ctx.builder.CreateAdd(v, addend, "add_counter");
+
+    // Compute the value to store by masking the new value with the condition
+    Value *masked_new_value = ctx.builder.CreateAnd(ptr_as_integer, condition_as_int);
+
+    // Compute the value to store by masking the old value with the inverse of the condition
+    Value *condition_not = ctx.builder.CreateNot(condition_as_int);
+    Value *masked_old_value = ctx.builder.CreateAnd(AllocaAsInt64, condition_not);
+
+    // Combine the masked values
+    Value *where_to_store_ptr_int = ctx.builder.CreateOr(masked_new_value, masked_old_value);
+
+    Value *where_to_store_ptr = ctx.builder.CreateIntToPtr(where_to_store_ptr_int, getInt64PtrTy(ctx.builder.getContext()), "where_to_store_ptr");
+
+    // Store the combined value
+    ctx.builder.CreateStore(new_value, where_to_store_ptr, true); // Volatile store
 }
 
 // Code coverage
