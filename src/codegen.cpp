@@ -2485,7 +2485,7 @@ static void visitLine(jl_codectx_t &ctx, uint64_t *ptr, Value *addend, const cha
         getInt64PtrTy(ctx.builder.getContext()));
     Value *v = ctx.builder.CreateLoad(getInt64Ty(ctx.builder.getContext()), pv, true, name);
     v = ctx.builder.CreateAdd(v, addend);
-    ctx.builder.CreateStore(v, pv, true); // volatile, not atomic, so this might be an underestimate,
+    // ctx.builder.CreateStore(v, pv, true); // volatile, not atomic, so this might be an underestimate,
                                           // but it's faster this way
 }
 
