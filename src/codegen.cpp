@@ -2478,17 +2478,6 @@ JL_DLLEXPORT void jl_coverage_alloc_line(StringRef filename, int line);
 JL_DLLEXPORT uint64_t *jl_coverage_data_pointer(StringRef filename, int line);
 JL_DLLEXPORT uint64_t *jl_malloc_data_pointer(StringRef filename, int line);
 
-static void visitLine(jl_codectx_t &ctx, uint64_t *ptr, Value *addend, const char *name)
-{
-    Value *pv = ConstantExpr::getIntToPtr(
-        ConstantInt::get(ctx.types().T_size, (uintptr_t)ptr),
-        getInt64PtrTy(ctx.builder.getContext()));
-    Value *v = ctx.builder.CreateLoad(getInt64Ty(ctx.builder.getContext()), pv, true, name);
-    v = ctx.builder.CreateAdd(v, addend);
-    ctx.builder.CreateStore(v, pv, true); // volatile, not atomic, so this might be an underestimate,
-                                          // but it's faster this way
-}
-
 // Code coverage
 
 static void coverageVisitLine(jl_codectx_t &ctx, StringRef filename, int line)
@@ -2497,7 +2486,21 @@ static void coverageVisitLine(jl_codectx_t &ctx, StringRef filename, int line)
         return; // TODO
     if (filename == "" || filename == "none" || filename == "no file" || filename == "<missing>" || line < 0)
         return;
-    visitLine(ctx, jl_coverage_data_pointer(filename, line), ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 1), "lcnt");
+    Value *pv = ConstantExpr::getIntToPtr(
+        ConstantInt::get(ctx.types().T_size, (uintptr_t)jl_coverage_data_pointer(filename, line)),
+        getInt64PtrTy(ctx.builder.getContext()));
+    Value *v = ctx.builder.CreateLoad(getInt64Ty(ctx.builder.getContext()), pv, true, "lcnt");
+    Value *is_zero = ctx.builder.CreateICmpEQ(v, ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 0));
+    setName(ctx.emission_context, is_zero, "lcnt_is_zero");
+    BasicBlock *doIncrBB = BasicBlock::Create(ctx.builder.getContext(), "lcnt_do_incr", ctx.f);
+    BasicBlock *contBB = BasicBlock::Create(ctx.builder.getContext(), "lcnt_cont", ctx.f);
+    ctx.builder.CreateCondBr(is_zero, doIncrBB, contBB);
+    ctx.builder.SetInsertPoint(doIncrBB);
+    v = ctx.builder.CreateAdd(v, ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 1));
+    ctx.builder.CreateStore(v, pv, true); // volatile, not atomic, so this might be an underestimate,
+                                          // but it's faster this way
+    ctx.builder.CreateBr(contBB);
+    ctx.builder.SetInsertPoint(contBB);
 }
 
 // Memory allocation log (malloc_log)
@@ -2511,7 +2514,13 @@ static void mallocVisitLine(jl_codectx_t &ctx, StringRef filename, int line, Val
     Value *addend = sync
         ? ctx.builder.CreateCall(prepare_call(sync_gc_total_bytes_func), {sync})
         : ctx.builder.CreateCall(prepare_call(diff_gc_total_bytes_func), {});
-    visitLine(ctx, jl_malloc_data_pointer(filename, line), addend, "bytecnt");
+    Value *pv = ConstantExpr::getIntToPtr(
+         ConstantInt::get(ctx.types().T_size, (uintptr_t)jl_malloc_data_pointer(filename, line)),
+         getInt64PtrTy(ctx.builder.getContext()));
+     Value *v = ctx.builder.CreateLoad(getInt64Ty(ctx.builder.getContext()), pv, true, "bytecnt");
+     v = ctx.builder.CreateAdd(v, addend);
+     ctx.builder.CreateStore(v, pv, true); // volatile, not atomic, so this might be an underestimate,
+                                           // but it's faster this way
 }
 
 // --- constant determination ---
