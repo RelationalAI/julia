@@ -3984,7 +3984,7 @@ JL_DLLEXPORT void jl_typeinf_lock_end(void)
 JL_DLLEXPORT void jl_coverage_touch_line(uint64_t *ptr, int64_t addend) {
     uint64_t v = *ptr;
     // Huh, apparently the first time this is called, `*ptr` is `1`, not `0`?
-    if (v <= 1) {
+    if (v <= 10) {
         *ptr = v + addend;
     }
 }
