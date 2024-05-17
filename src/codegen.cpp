@@ -2496,7 +2496,10 @@ static void visitLine(jl_codectx_t &ctx, uint64_t *ptr, Value *addend, const cha
     Value *pv = ConstantExpr::getIntToPtr(
         ConstantInt::get(ctx.types().T_size, (uintptr_t)ptr),
         getInt64PtrTy(ctx.builder.getContext()));
-    ctx.builder.CreateCall(prepare_call(jl_code_coverage_touch_line_func), {pv, addend});
+    ctx.builder.CreateStore(ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 2), pv, true); // volatile, not atomic, so this might be an underestimate,
+                                          // but it's faster this way
+
+    // ctx.builder.CreateCall(prepare_call(jl_code_coverage_touch_line_func), {pv, addend});
 }
 
 // Code coverage
