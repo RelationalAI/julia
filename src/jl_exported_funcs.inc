@@ -527,6 +527,7 @@
     XX(jl_wakeup_thread) \
     XX(jl_write_compiler_output) \
     XX(jl_yield) \
+    XX(jl_coverage_touch_line) \
 
 #define JL_RUNTIME_EXPORTED_FUNCS_WIN(XX) \
     XX(jl_setjmp) \
