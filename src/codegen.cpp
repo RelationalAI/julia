@@ -2489,7 +2489,7 @@ static void coverageVisitLine(jl_codectx_t &ctx, StringRef filename, int line)
     Value *pv = ConstantExpr::getIntToPtr(
         ConstantInt::get(ctx.types().T_size, (uintptr_t)jl_coverage_data_pointer(filename, line)),
         getInt64PtrTy(ctx.builder.getContext()));
-    ctx.builder.CreateStore(ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 1), pv);
+    ctx.builder.CreateStore(ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 2), pv);
 }
 
 // Memory allocation log (malloc_log)
