@@ -2489,18 +2489,7 @@ static void coverageVisitLine(jl_codectx_t &ctx, StringRef filename, int line)
     Value *pv = ConstantExpr::getIntToPtr(
         ConstantInt::get(ctx.types().T_size, (uintptr_t)jl_coverage_data_pointer(filename, line)),
         getInt64PtrTy(ctx.builder.getContext()));
-    Value *v = ctx.builder.CreateLoad(getInt64Ty(ctx.builder.getContext()), pv, true, "lcnt");
-    Value *is_zero = ctx.builder.CreateICmpEQ(v, ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 0));
-    setName(ctx.emission_context, is_zero, "lcnt_is_zero");
-    BasicBlock *doIncrBB = BasicBlock::Create(ctx.builder.getContext(), "lcnt_do_incr", ctx.f);
-    BasicBlock *contBB = BasicBlock::Create(ctx.builder.getContext(), "lcnt_cont", ctx.f);
-    ctx.builder.CreateCondBr(is_zero, doIncrBB, contBB);
-    ctx.builder.SetInsertPoint(doIncrBB);
-    v = ctx.builder.CreateAdd(v, ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 1));
-    ctx.builder.CreateStore(v, pv, true); // volatile, not atomic, so this might be an underestimate,
-                                          // but it's faster this way
-    ctx.builder.CreateBr(contBB);
-    ctx.builder.SetInsertPoint(contBB);
+    ctx.builder.CreateStore(ConstantInt::get(getInt64Ty(ctx.builder.getContext()), 1), pv);
 }
 
 // Memory allocation log (malloc_log)
