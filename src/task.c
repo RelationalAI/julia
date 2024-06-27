@@ -287,6 +287,18 @@ JL_NO_ASAN static void restore_stack2(jl_task_t *t, jl_ptls_t ptls, jl_task_t *l
 }
 #endif
 
+static _Atomic(int64_t) total_copy_stack_tasks = 0;
+JL_DLLEXPORT int64_t jl_total_copy_stack_tasks(void)
+{
+    return jl_atomic_load_relaxed(&total_copy_stack_tasks);
+}
+
+static _Atomic(int64_t) num_copy_stack_tasks = 0;
+JL_DLLEXPORT int64_t jl_num_copy_stack_tasks(void)
+{
+    return jl_atomic_load_relaxed(&num_copy_stack_tasks);
+}
+
 /* Rooted by the base module */
 static _Atomic(jl_function_t*) task_done_hook_func JL_GLOBALLY_ROOTED = NULL;
 
@@ -302,6 +314,8 @@ void JL_NORETURN jl_finish_task(jl_task_t *t)
     if (t->copy_stack) { // early free of stkbuf
         asan_free_copy_stack(t->stkbuf, t->bufsz);
         t->stkbuf = NULL;
+        jl_atomic_store_release(&num_copy_stack_tasks,
+                jl_atomic_load_relaxed(&num_copy_stack_tasks) - 1);
     }
     // ensure that state is cleared
     ct->ptls->in_finalizer = 0;
@@ -460,6 +474,10 @@ JL_NO_ASAN static void ctx_switch(jl_task_t *lastt)
                 t->copy_stack = 1;
                 t->sticky = 1;
                 t->bufsz = 0;
+                jl_atomic_store_release(&total_copy_stack_tasks,
+                        jl_atomic_load_relaxed(&total_copy_stack_tasks) + 1);
+                jl_atomic_store_release(&num_copy_stack_tasks,
+                        jl_atomic_load_relaxed(&num_copy_stack_tasks) + 1);
                 if (always_copy_stacks)
                     memcpy(&t->ctx.copy_ctx, &ptls->copy_stack_ctx, sizeof(t->ctx.copy_ctx));
                 else
