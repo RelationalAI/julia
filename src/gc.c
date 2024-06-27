@@ -767,10 +767,16 @@ static void gc_sync_cache_nolock(jl_ptls_t ptls, jl_gc_mark_cache_t *gc_cache) J
         bigval_t *hdr = (bigval_t*)gc_ptr_clear_tag(ptr, 1);
         gc_big_object_unlink(hdr);
         if (gc_ptr_tag(ptr, 1)) {
+            hdr->owner_thread_ptls = ptls;
+            // No need to acquire the lock since this code either runs serially or
+            // it's guarded by the `gc_cache_lock`.
             gc_big_object_link(hdr, &ptls->heap.big_objects);
         }
         else {
             // Move hdr from `big_objects` list to `big_objects_marked list`
+            hdr->owner_thread_ptls = NULL;
+            // No need to acquire the lock since this code either runs serially or
+            // it's guarded by the `gc_cache_lock`.
             gc_big_object_link(hdr, &big_objects_marked);
         }
     }
@@ -1027,7 +1033,10 @@ STATIC_INLINE jl_value_t *jl_gc_big_alloc_inner(jl_ptls_t ptls, size_t sz)
     memset(v, 0xee, allocsz);
 #endif
     v->sz = allocsz;
+    v->owner_thread_ptls = ptls;
+    jl_mutex_lock_nogc(&ptls->heap.big_objects_lock);
     gc_big_object_link(v, &ptls->heap.big_objects);
+    jl_mutex_unlock_nogc(&ptls->heap.big_objects_lock);
     return jl_valueof(&v->header);
 }
 
@@ -1055,7 +1064,7 @@ jl_value_t *jl_gc_big_alloc_noinline(jl_ptls_t ptls, size_t sz) {
 
 // Sweep list rooted at *pv, removing and freeing any unmarked objects.
 // Return pointer to last `next` field in the culled list.
-static bigval_t **sweep_big_list(int sweep_full, bigval_t **pv) JL_NOTSAFEPOINT
+static bigval_t **sweep_big_list(int sweep_full, jl_ptls_t ptls, bigval_t **pv) JL_NOTSAFEPOINT
 {
     bigval_t *v = *pv;
     while (v != NULL) {
@@ -1067,6 +1076,7 @@ static bigval_t **sweep_big_list(int sweep_full, bigval_t **pv) JL_NOTSAFEPOINT
             if (sweep_full || bits == GC_MARKED) {
                 bits = GC_OLD;
             }
+            v->owner_thread_ptls = ptls;
             v->bits.gc = bits;
         }
         else {
@@ -1095,10 +1105,10 @@ static void sweep_big(jl_ptls_t ptls, int sweep_full) JL_NOTSAFEPOINT
     for (int i = 0; i < gc_n_threads; i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[i];
         if (ptls2 != NULL)
-            sweep_big_list(sweep_full, &ptls2->heap.big_objects);
+            sweep_big_list(sweep_full, ptls2, &ptls2->heap.big_objects);
     }
     if (sweep_full) {
-        bigval_t **last_next = sweep_big_list(sweep_full, &big_objects_marked);
+        bigval_t **last_next = sweep_big_list(sweep_full, ptls, &big_objects_marked);
         // Move all survivors from big_objects_marked list to the big_objects list of this thread.
         if (ptls->heap.big_objects)
             ptls->heap.big_objects->prev = last_next;
@@ -3876,6 +3886,7 @@ void jl_init_thread_heap(jl_ptls_t ptls)
         small_arraylist_new(&heap->free_stacks[i], 0);
     heap->mallocarrays = NULL;
     heap->mafreelist = NULL;
+    JL_MUTEX_INIT(&heap->big_objects_lock, "big_objects");
     heap->big_objects = NULL;
     heap->remset = &heap->_remset[0];
     heap->last_remset = &heap->_remset[1];
@@ -4198,14 +4209,20 @@ jl_value_t *jl_gc_realloc_string(jl_value_t *s, size_t sz)
     bigval_t *hdr = bigval_header(v);
     jl_ptls_t ptls = jl_current_task->ptls;
     maybe_collect(ptls); // don't want this to happen during jl_gc_managed_realloc
+    jl_ptls_t ptls2 = hdr->owner_thread_ptls;
+    assert(ptls2 != NULL);
+    jl_mutex_lock_nogc(&ptls2->heap.big_objects_lock);
     gc_big_object_unlink(hdr);
+    jl_mutex_unlock_nogc(&ptls2->heap.big_objects_lock);
     // TODO: this is not safe since it frees the old pointer. ideally we'd like
     // the old pointer to be left alone if we can't grow in place.
     // for now it's up to the caller to make sure there are no references to the
     // old pointer.
     bigval_t *newbig = (bigval_t*)gc_managed_realloc_(ptls, hdr, allocsz, oldsz, 1, s, 0);
     newbig->sz = allocsz;
+    jl_mutex_lock_nogc(&ptls->heap.big_objects_lock);
     gc_big_object_link(newbig, &ptls->heap.big_objects);
+    jl_mutex_unlock_nogc(&ptls->heap.big_objects_lock);
     jl_value_t *snew = jl_valueof(&newbig->header);
     *(size_t*)snew = sz;
     return snew;

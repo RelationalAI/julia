@@ -151,6 +151,7 @@ typedef struct {
     struct _mallocarray_t *mafreelist;
 
     // variables for tracking big objects
+    jl_mutex_t big_objects_lock;
     struct _bigval_t *big_objects;
 
     // variables for tracking "remembered set"

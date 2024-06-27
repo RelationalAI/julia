@@ -122,12 +122,13 @@ JL_EXTENSION typedef struct _bigval_t {
     struct _bigval_t *next;
     struct _bigval_t **prev; // pointer to the next field of the prev entry
     size_t sz;
+    jl_ptls_t owner_thread_ptls;
 #ifdef _P64 // Add padding so that the value is 64-byte aligned
-    // (8 pointers of 8 bytes each) - (4 other pointers in struct)
-    void *_padding[8 - 4];
+    // (8 pointers of 8 bytes each) - (5 other pointers in struct)
+    void *_padding[8 - 5];
 #else
-    // (16 pointers of 4 bytes each) - (4 other pointers in struct)
-    void *_padding[16 - 4];
+    // (16 pointers of 4 bytes each) - (5 other pointers in struct)
+    void *_padding[16 - 5];
 #endif
     //struct jl_taggedvalue_t <>;
     union {
