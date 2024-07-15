@@ -1078,10 +1078,29 @@ static void jl_verify_graph(jl_array_t *edges, jl_array_t *maxvalids2)
 // Restore backedges to external targets
 // `edges` = [caller1, targets_indexes1, ...], the list of worklist-owned methods calling external methods.
 // `ext_targets` is [invokesig1, callee1, matches1, ...], the global set of non-worklist callees of worklist-owned methods.
-static void jl_insert_backedges(jl_array_t *edges, jl_array_t *ext_targets, jl_array_t *ci_list, size_t minworld)
+static void jl_insert_backedges(jl_array_t *edges, jl_array_t *ext_targets, jl_array_t *ci_list, size_t minworld, int skip_verify_edges)
 {
-    // determine which CodeInstance objects are still valid in our image
-    jl_array_t *valids = jl_verify_edges(ext_targets, minworld);
+    jl_array_t *valids;
+    if (skip_verify_edges == 1) {
+        // The RAI use case of caching JITted code via package images based on precompile
+        // statements from running engines was getting bottlenecked by the subtyping checks
+        // in jl_verify_edges. Since we're only loading new method instances and never introducing
+        // new  methods in these packages, we want to avoid the expensive checks.
+        // The package image would be only created _and_ loaded by a Julia process with the same system
+        // image and same set of dependencies.
+        // Relevant issue: https://github.com/JuliaLang/julia/issues/48092
+        size_t max_valid = ~(size_t)0;
+        static jl_value_t *ulong_array JL_ALWAYS_LEAFTYPE = NULL;
+        if (ulong_array == NULL) {
+            ulong_array = jl_apply_array_type((jl_value_t*)jl_ulong_type, 1);
+        }
+        size_t ntargets = jl_array_len(ext_targets) / 3;
+        valids = jl_alloc_array_1d(ulong_array, ntargets);
+        memset(jl_array_data(valids), max_valid, ntargets * sizeof(size_t));
+    } else {
+        // determine which CodeInstance objects are still valid in our image
+        valids = jl_verify_edges(ext_targets, minworld);
+    }
     JL_GC_PUSH1(&valids);
     valids = jl_verify_methods(edges, valids); // consumes edges valids, initializes methods valids
     jl_verify_graph(edges, valids); // propagates methods valids for each edge

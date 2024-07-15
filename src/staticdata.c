@@ -3393,7 +3393,7 @@ static jl_value_t *jl_validate_cache_file(ios_t *f, jl_array_t *depmods, uint64_
 }
 
 // TODO?: refactor to make it easier to create the "package inspector"
-static jl_value_t *jl_restore_package_image_from_stream(void* pkgimage_handle, ios_t *f, jl_image_t *image, jl_array_t *depmods, int completeinfo, const char *pkgname, bool needs_permalloc)
+static jl_value_t *jl_restore_package_image_from_stream(void* pkgimage_handle, ios_t *f, jl_image_t *image, jl_array_t *depmods, int completeinfo, const char *pkgname, bool needs_permalloc, int skip_verify_edges)
 {
     JL_TIMING(LOAD_IMAGE, LOAD_Pkgimg);
     jl_timing_printf(JL_TIMING_DEFAULT_BLOCK, pkgname);
@@ -3446,7 +3446,7 @@ static jl_value_t *jl_restore_package_image_from_stream(void* pkgimage_handle, i
             jl_copy_roots(method_roots_list, jl_worklist_key((jl_array_t*)restored));
             // Handle edges
             size_t world = jl_atomic_load_acquire(&jl_world_counter);
-            jl_insert_backedges((jl_array_t*)edges, (jl_array_t*)ext_targets, (jl_array_t*)new_specializations, world); // restore external backedges (needs to be last)
+            jl_insert_backedges((jl_array_t*)edges, (jl_array_t*)ext_targets, (jl_array_t*)new_specializations, world, skip_verify_edges); // restore external backedges (needs to be last)
             // reinit ccallables
             jl_reinit_ccallable(&ccallable_list, base, pkgimage_handle);
             arraylist_free(&ccallable_list);
@@ -3479,16 +3479,16 @@ static void jl_restore_system_image_from_stream(ios_t *f, jl_image_t *image, uin
     jl_restore_system_image_from_stream_(f, image, NULL, checksum | ((uint64_t)0xfdfcfbfa << 32), NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 }
 
-JL_DLLEXPORT jl_value_t *jl_restore_incremental_from_buf(void* pkgimage_handle, const char *buf, jl_image_t *image, size_t sz, jl_array_t *depmods, int completeinfo, const char *pkgname, bool needs_permalloc)
+JL_DLLEXPORT jl_value_t *jl_restore_incremental_from_buf(void* pkgimage_handle, const char *buf, jl_image_t *image, size_t sz, jl_array_t *depmods, int completeinfo, const char *pkgname, bool needs_permalloc, int skip_verify_edges)
 {
     ios_t f;
     ios_static_buffer(&f, (char*)buf, sz);
-    jl_value_t *ret = jl_restore_package_image_from_stream(pkgimage_handle, &f, image, depmods, completeinfo, pkgname, needs_permalloc);
+    jl_value_t *ret = jl_restore_package_image_from_stream(pkgimage_handle, &f, image, depmods, completeinfo, pkgname, needs_permalloc, skip_verify_edges);
     ios_close(&f);
     return ret;
 }
 
-JL_DLLEXPORT jl_value_t *jl_restore_incremental(const char *fname, jl_array_t *depmods, int completeinfo, const char *pkgname)
+JL_DLLEXPORT jl_value_t *jl_restore_incremental(const char *fname, jl_array_t *depmods, int completeinfo, const char *pkgname, int skip_verify_edges)
 {
     ios_t f;
     if (ios_file(&f, fname, 1, 0, 0, 0) == NULL) {
@@ -3496,7 +3496,7 @@ JL_DLLEXPORT jl_value_t *jl_restore_incremental(const char *fname, jl_array_t *d
             "Cache file \"%s\" not found.\n", fname);
     }
     jl_image_t pkgimage = {};
-    jl_value_t *ret = jl_restore_package_image_from_stream(NULL, &f, &pkgimage, depmods, completeinfo, pkgname, true);
+    jl_value_t *ret = jl_restore_package_image_from_stream(NULL, &f, &pkgimage, depmods, completeinfo, pkgname, true, skip_verify_edges);
     ios_close(&f);
     return ret;
 }
@@ -3546,7 +3546,7 @@ JL_DLLEXPORT void jl_restore_system_image_data(const char *buf, size_t len)
     JL_SIGATOMIC_END();
 }
 
-JL_DLLEXPORT jl_value_t *jl_restore_package_image_from_file(const char *fname, jl_array_t *depmods, int completeinfo, const char *pkgname)
+JL_DLLEXPORT jl_value_t *jl_restore_package_image_from_file(const char *fname, jl_array_t *depmods, int completeinfo, const char *pkgname, int skip_verify_edges)
 {
     void *pkgimg_handle = jl_dlopen(fname, JL_RTLD_LAZY);
     if (!pkgimg_handle) {
@@ -3567,7 +3567,7 @@ JL_DLLEXPORT jl_value_t *jl_restore_package_image_from_file(const char *fname, j
 
     jl_image_t pkgimage = jl_init_processor_pkgimg(pkgimg_handle);
 
-    jl_value_t* mod = jl_restore_incremental_from_buf(pkgimg_handle, pkgimg_data, &pkgimage, *plen, depmods, completeinfo, pkgname, false);
+    jl_value_t* mod = jl_restore_incremental_from_buf(pkgimg_handle, pkgimg_data, &pkgimage, *plen, depmods, completeinfo, pkgname, false, skip_verify_edges);
 
     return mod;
 }

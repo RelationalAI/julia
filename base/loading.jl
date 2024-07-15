@@ -1043,7 +1043,7 @@ const TIMING_IMPORTS = Threads.Atomic{Int}(0)
 # these return either the array of modules loaded from the path / content given
 # or an Exception that describes why it couldn't be loaded
 # and it reconnects the Base.Docs.META
-function _include_from_serialized(pkg::PkgId, path::String, ocachepath::Union{Nothing, String}, depmods::Vector{Any})
+function _include_from_serialized(pkg::PkgId, path::String, ocachepath::Union{Nothing, String}, depmods::Vector{Any}, skip_verify_edges::Int=0)
     assert_havelock(require_lock)
     timing_imports = TIMING_IMPORTS[] > 0
     try
@@ -1055,10 +1055,10 @@ function _include_from_serialized(pkg::PkgId, path::String, ocachepath::Union{No
 
     if ocachepath !== nothing
         @debug "Loading object cache file $ocachepath for $pkg"
-        sv = ccall(:jl_restore_package_image_from_file, Any, (Cstring, Any, Cint, Cstring), ocachepath, depmods, false, pkg.name)
+        sv = ccall(:jl_restore_package_image_from_file, Any, (Cstring, Any, Cint, Cstring, Cint), ocachepath, depmods, false, pkg.name, skip_verify_edges)
     else
         @debug "Loading cache file $path for $pkg"
-        sv = ccall(:jl_restore_incremental, Any, (Cstring, Any, Cint, Cstring), path, depmods, false, pkg.name)
+        sv = ccall(:jl_restore_incremental, Any, (Cstring, Any, Cint, Cstring, Cint), path, depmods, false, pkg.name, skip_verify_edges)
     end
     if isa(sv, Exception)
         return sv
