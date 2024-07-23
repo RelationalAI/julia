@@ -5,7 +5,10 @@
 #include "julia.h"
 #include "julia_gcext.h"
 #include "julia_assert.h"
-#ifdef __GLIBC__
+
+#if defined(_OS_DARWIN_)
+#include <malloc/malloc.h>
+#else
 #include <malloc.h> // for malloc_trim
 #endif
 
@@ -253,6 +256,7 @@ void jl_gc_wait_for_the_world(jl_ptls_t* gc_all_tls_states, int gc_n_threads)
 #if defined(_OS_WINDOWS_)
 STATIC_INLINE void *jl_malloc_aligned(size_t sz, size_t align)
 {
+    assert(align == JL_CACHE_BYTE_ALIGNMENT);
     return _aligned_malloc(sz ? sz : 1, align);
 }
 STATIC_INLINE void *jl_realloc_aligned(void *p, size_t sz, size_t oldsz,
@@ -268,6 +272,7 @@ STATIC_INLINE void jl_free_aligned(void *p) JL_NOTSAFEPOINT
 #else
 STATIC_INLINE void *jl_malloc_aligned(size_t sz, size_t align)
 {
+    assert(align == JL_CACHE_BYTE_ALIGNMENT);
 #if defined(_P64) || defined(__APPLE__)
     if (align <= 16)
         return malloc(sz);
@@ -296,6 +301,16 @@ STATIC_INLINE void jl_free_aligned(void *p) JL_NOTSAFEPOINT
     free(p);
 }
 #endif
+size_t memory_block_usable_size(void *p) JL_NOTSAFEPOINT
+{
+#if defined(_OS_WINDOWS_)
+    return _aligned_msize(p, JL_CACHE_BYTE_ALIGNMENT, 0);
+#elif defined(_OS_DARWIN_)
+    return malloc_size(p);
+#else
+    return malloc_usable_size(p);
+#endif
+}
 #define malloc_cache_align(sz) jl_malloc_aligned(sz, JL_CACHE_BYTE_ALIGNMENT)
 #define realloc_cache_align(p, sz, oldsz) jl_realloc_aligned(p, sz, oldsz, JL_CACHE_BYTE_ALIGNMENT)
 
@@ -1115,13 +1130,6 @@ void jl_gc_count_allocd(size_t sz) JL_NOTSAFEPOINT
         jl_atomic_load_relaxed(&ptls->gc_tls.gc_num.allocd) + sz);
 }
 
-void jl_gc_count_freed(size_t sz) JL_NOTSAFEPOINT
-{
-    jl_ptls_t ptls = jl_current_task->ptls;
-    jl_atomic_store_relaxed(&ptls->gc_tls.gc_num.freed,
-        jl_atomic_load_relaxed(&ptls->gc_tls.gc_num.freed) + sz);
-}
-
 static void combine_thread_gc_counts(jl_gc_num_t *dest) JL_NOTSAFEPOINT
 {
     int gc_n_threads;
@@ -1196,11 +1204,12 @@ static void jl_gc_free_array(jl_array_t *a) JL_NOTSAFEPOINT
 {
     if (a->flags.how == 2) {
         char *d = (char*)a->data - a->offset*a->elsize;
+        size_t freed_bytes = memory_block_usable_size(d);
         if (a->flags.isaligned)
             jl_free_aligned(d);
         else
             free(d);
-        gc_num.freed += jl_array_nbytes(a);
+        gc_num.freed += freed_bytes;
         gc_num.freecall++;
     }
 }
@@ -4113,8 +4122,10 @@ JL_DLLEXPORT void *jl_gc_managed_malloc(size_t sz)
     if (b == NULL)
         jl_throw(jl_memory_exception);
 
+    size_t allocated_bytes = memory_block_usable_size(b);
+    assert(allocated_bytes >= allocsz);
     jl_atomic_store_relaxed(&ptls->gc_tls.gc_num.allocd,
-        jl_atomic_load_relaxed(&ptls->gc_tls.gc_num.allocd) + allocsz);
+        jl_atomic_load_relaxed(&ptls->gc_tls.gc_num.allocd) + allocated_bytes);
     jl_atomic_store_relaxed(&ptls->gc_tls.gc_num.malloc,
         jl_atomic_load_relaxed(&ptls->gc_tls.gc_num.malloc) + 1);
 #ifdef _OS_WINDOWS_
