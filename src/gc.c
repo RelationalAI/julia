@@ -3669,10 +3669,15 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     last_live_bytes = live_bytes;
     live_bytes += -gc_num.freed + actual_allocd;
 
+    // XXX: we've observed that the `live_bytes` was negative in a few cases
+    // which is not expected. We should investigate this further, but let's just
+    // cap it to 0 for now.
+    int64_t live_bytes_for_interval_computation = live_bytes < 0 ? 0 : live_bytes;
+
     if (collection == JL_GC_AUTO) {
         //If we aren't freeing enough or are seeing lots and lots of pointers let it increase faster
         if (not_freed_enough || large_frontier) {
-            int64_t tot = 2 * (live_bytes + actual_allocd) / 3;
+            int64_t tot = 2 * (live_bytes_for_interval_computation + actual_allocd) / 3;
             if (gc_num.interval > tot) {
                 gc_num.interval = tot;
                 last_long_collect_interval = tot;
@@ -3680,7 +3685,7 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
         }
         // If the current interval is larger than half the live data decrease the interval
         else {
-            int64_t half = (live_bytes / 2);
+            int64_t half = (live_bytes_for_interval_computation / 2);
             if (gc_num.interval > half)
                 gc_num.interval = half;
         }
@@ -3688,10 +3693,10 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
         if (gc_num.interval < default_collect_interval) gc_num.interval = default_collect_interval;
     }
 
-    if (gc_num.interval + live_bytes > max_total_memory) {
-        if (live_bytes < max_total_memory) {
-            gc_num.interval = max_total_memory - live_bytes;
-            last_long_collect_interval = max_total_memory - live_bytes;
+    if (gc_num.interval + live_bytes_for_interval_computation > max_total_memory) {
+        if (live_bytes_for_interval_computation < max_total_memory) {
+            gc_num.interval = max_total_memory - live_bytes_for_interval_computation;
+            last_long_collect_interval = max_total_memory - live_bytes_for_interval_computation;
         }
         else {
             // We can't stay under our goal so let's go back to
