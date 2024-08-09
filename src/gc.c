@@ -8,6 +8,7 @@
 #ifdef __GLIBC__
 #include <malloc.h> // for malloc_trim
 #endif
+#include <math.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -3690,7 +3691,12 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
                 gc_num.interval = half;
         }
         // But never go below default
-        if (gc_num.interval < default_collect_interval) gc_num.interval = default_collect_interval;
+        if (gc_num.interval < default_collect_interval)
+            gc_num.interval = default_collect_interval;
+        // And never go above the upper bound
+        const int64_t interval_upper_bound = (int64_t)((double)max_total_memory / log2((double)max_total_memory));
+        if (gc_num.interval > interval_upper_bound)
+            gc_num.interval = interval_upper_bound;
     }
 
     if (gc_num.interval + live_bytes_for_interval_computation > max_total_memory) {
