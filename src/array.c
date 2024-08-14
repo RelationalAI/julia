@@ -479,7 +479,6 @@ JL_DLLEXPORT jl_value_t *jl_array_to_string(jl_array_t *a)
             return o;
         }
     }
-    jl_gc_count_freed(jl_array_nbytes(a));
     a->nrows = 0;
     a->length = 0;
     return jl_pchar_to_string((const char*)jl_array_data(a), len);
