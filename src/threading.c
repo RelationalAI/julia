@@ -9,6 +9,7 @@
 #include "julia.h"
 #include "julia_internal.h"
 #include "julia_assert.h"
+#include "gc.h"
 
 #ifdef USE_ITTAPI
 #include "ittapi/ittnotify.h"
@@ -55,10 +56,12 @@ void jl_set_thread_start_time(void)
     jl_thread_start_time = jl_hrtime();
 }
 
+// TODO: does this include interactive threads? should it?
 JL_DLLEXPORT uint64_t jl_user_cpu_time(void)
 {
     uint64_t t = jl_hrtime();
-    return t - jl_thread_start_time; // - jl_gc_total_hrtime();
+    // return t - jl_thread_start_time;
+    return t - jl_thread_start_time - jl_gc_total_hrtime();
 }
 
 JL_DLLEXPORT void *jl_get_ptls_states(void)
