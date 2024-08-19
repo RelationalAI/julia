@@ -49,6 +49,18 @@ JL_DLLEXPORT _Atomic(uint8_t) jl_measure_compile_time_enabled = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_compile_time = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_recompile_time = 0;
 
+static uint64_t jl_thread_start_time;
+void jl_set_thread_start_time(void)
+{
+    jl_thread_start_time = jl_hrtime();
+}
+
+JL_DLLEXPORT uint64_t jl_user_cpu_time(void)
+{
+    uint64_t t = jl_hrtime();
+    return t - jl_thread_start_time; // - jl_gc_total_hrtime();
+}
+
 JL_DLLEXPORT void *jl_get_ptls_states(void)
 {
     // mostly deprecated: use current_task instead
@@ -765,6 +777,7 @@ void jl_start_threads(void)
         }
         uv_thread_detach(&uvtid);
     }
+    jl_set_thread_start_time();
 }
 
 _Atomic(unsigned) _threadedregion; // HACK: keep track of whether to prioritize IO or threading
@@ -918,7 +931,6 @@ void _jl_mutex_unlock(jl_task_t *self, jl_mutex_t *lock)
         jl_gc_run_pending_finalizers(self); // may GC
     }
 }
-
 
 // Make gc alignment available for threading
 // see threads.jl alignment

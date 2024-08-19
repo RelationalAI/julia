@@ -30,6 +30,7 @@ void jl_init_threadinginfra(void);
 void jl_parallel_gc_threadfun(void *arg);
 void jl_concurrent_gc_threadfun(void *arg);
 void jl_threadfun(void *arg);
+void jl_set_thread_start_time(void);
 
 #ifdef __cplusplus
 }
