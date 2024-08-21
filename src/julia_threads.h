@@ -124,6 +124,14 @@ typedef struct {
 
 struct _jl_bt_element_t;
 
+typedef struct {
+    uint64_t start_time;
+    uint64_t sleep_time;
+    uint64_t lock_spin_time;
+    /* uint64_t lock_spin_entry; // needed to time Threads.SpinLock */
+    uint64_t gc_time;
+} jl_timing_tls_states_t;
+
 // This includes all the thread local states we care about for a thread.
 // Changes to TLS field types must be reflected in codegen.
 #define JL_MAX_BT_SIZE 80000
@@ -155,6 +163,7 @@ typedef struct _jl_tls_states_t {
     // Counter to disable finalizer **on the current thread**
     int finalizers_inhibited;
     jl_gc_tls_states_t gc_tls; // this is very large, and the offset of the first member is baked into codegen
+    jl_timing_tls_states_t timing_tls;
     volatile sig_atomic_t defer_signal;
     _Atomic(struct _jl_task_t*) current_task;
     struct _jl_task_t *next_task;

@@ -3741,7 +3741,7 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     int8_t old_state = jl_atomic_load_relaxed(&ptls->gc_state);
     jl_atomic_store_release(&ptls->gc_state, JL_GC_STATE_WAITING);
     // `jl_safepoint_start_gc()` makes sure only one thread can run the GC.
-    uint64_t t0 = jl_hrtime();
+    uint64_t t0 = jl_hrtime(); // time we entered GC
     if (!jl_safepoint_start_gc()) {
         // either another thread is running GC, or the GC got disabled just now.
         jl_gc_state_set(ptls, old_state, JL_GC_STATE_WAITING);
@@ -3770,7 +3770,7 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     jl_gc_wait_for_the_world(gc_all_tls_states, gc_n_threads);
     JL_PROBE_GC_STOP_THE_WORLD();
 
-    uint64_t t1 = jl_hrtime();
+    uint64_t t1 = jl_hrtime();  // time user code stopped running
     uint64_t duration = t1 - t0;
     if (duration > gc_num.max_time_to_safepoint)
         gc_num.max_time_to_safepoint = duration;
@@ -3798,6 +3798,8 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
     jl_safepoint_end_gc();
     jl_gc_state_set(ptls, old_state, JL_GC_STATE_WAITING);
     JL_PROBE_GC_END();
+    // Time how long GC took.
+    ptls->timing_tls.gc_time += jl_hrtime() - t1;
 
     // Only disable finalizers on current thread
     // Doing this on all threads is racy (it's impossible to check
