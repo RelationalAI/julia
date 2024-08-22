@@ -116,7 +116,9 @@ end
 
 # eventually this should give user CPU time (in nanoseconds), but for now it's just the
 # time since Julia threads were started
-user_cpu_time() = ccall(:jl_user_cpu_time, UInt64, ())
+# user_cpu_time() = ccall(:jl_user_cpu_time, UInt64, ())
+thread_up_time() = ccall(:jl_thread_up_time, UInt64, ())
+thread_user_time() = ccall(:jl_thread_user_time, UInt64, ())
 
 # print elapsed time, return expression value
 const _mem_units = ["byte", "KiB", "MiB", "GiB", "TiB", "PiB"]

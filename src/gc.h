@@ -573,7 +573,6 @@ void gc_sweep_pool_parallel(jl_ptls_t ptls);
 void gc_free_pages(void);
 void sweep_stack_pools(void);
 void jl_gc_debug_init(void);
-uint64_t jl_gc_total_hrtime(void);
 
 // GC pages
 
