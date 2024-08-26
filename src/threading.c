@@ -1008,6 +1008,40 @@ JL_DLLEXPORT int jl_heartbeat_enable(int heartbeat_s, int show_tasks_after_n,
     return 0;
 }
 
+// temporarily pause the heartbeat thread
+JL_DLLEXPORT int jl_heartbeat_pause(void)
+{
+    if (!heartbeat_enabled) {
+        return -1;
+    }
+    heartbeat_enabled = 0;
+    return 0;
+}
+
+// resume the paused heartbeat thread
+JL_DLLEXPORT int jl_heartbeat_resume(void)
+{
+    // cannot resume if the heartbeat thread is already running
+    if (heartbeat_enabled) {
+        return -1;
+    }
+
+    // cannot resume if we weren't paused (disabled != paused)
+    if (heartbeat_interval_s == 0) {
+        return -1;
+    }
+
+    // heartbeat thread must be ready
+    if (uv_sem_trywait(&heartbeat_off_sem) != 0) {
+        return -1;
+    }
+    n_hbs_missed = 0;
+    n_hbs_recvd = 0;
+    heartbeat_enabled = 1;
+    uv_sem_post(&heartbeat_on_sem); // wake the heartbeat thread
+    return 0;
+}
+
 // heartbeat
 JL_DLLEXPORT void jl_heartbeat(void)
 {
@@ -1099,7 +1133,7 @@ void jl_heartbeat_threadfun(void *arg)
             uv_sem_post(&heartbeat_off_sem);
 
             // sleep the thread here; this semaphore is posted in
-            // jl_heartbeat_enable()
+            // jl_heartbeat_enable() or jl_heartbeat_resume()
             uv_sem_wait(&heartbeat_on_sem);
 
             // Set the sleep duration.
@@ -1111,7 +1145,7 @@ void jl_heartbeat_threadfun(void *arg)
         // heartbeat is enabled; sleep, waiting for the desired interval
         sleep_for(s, ns);
 
-        // if heartbeats were turned off while we were sleeping, reset
+        // if heartbeats were turned off/paused while we were sleeping, reset
         if (!heartbeat_enabled) {
             continue;
         }
@@ -1146,6 +1180,16 @@ int jl_inside_heartbeat_thread(void)
 
 JL_DLLEXPORT int jl_heartbeat_enable(int heartbeat_s, int show_tasks_after_n,
                                      int reset_after_n)
+{
+    return -1;
+}
+
+JL_DLLEXPORT int jl_heartbeat_pause(void)
+{
+    return -1;
+}
+
+JL_DLLEXPORT int jl_heartbeat_resume(void)
 {
     return -1;
 }
