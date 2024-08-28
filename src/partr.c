@@ -389,12 +389,14 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
 {
     jl_task_t *ct = jl_current_task;
     uint64_t start_cycles = 0;
-
+    uint64_t t0 = jl_hrtime();
     while (1) {
+        jl_ptls_t ptls = ct->ptls;
         jl_task_t *task = get_next_task(trypoptask, q);
-        if (task)
+        if (task) {
+            ptls->timing_tls.scheduler_time += jl_hrtime() - t0;
             return task;
-
+        }
         // quick, race-y check to see if there seems to be any stuff in there
         jl_cpu_pause();
         if (!check_empty(checkempty)) {
@@ -403,7 +405,6 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
         }
 
         jl_cpu_pause();
-        jl_ptls_t ptls = ct->ptls;
         if (sleep_check_after_threshold(&start_cycles) || (ptls->tid == 0 && (!jl_atomic_load_relaxed(&_threadedregion) || wait_empty))) {
             // acquire sleep-check lock
             jl_atomic_store_relaxed(&ptls->sleep_check_state, sleeping);
@@ -425,6 +426,7 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
                     JL_PROBE_RT_SLEEP_CHECK_TASK_WAKE(ptls);
                 }
                 if (task)
+                    ptls->timing_tls.scheduler_time += jl_hrtime() - t0;
                     return task;
                 continue;
             }
@@ -433,6 +435,7 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
                     jl_atomic_store_relaxed(&ptls->sleep_check_state, not_sleeping); // let other threads know they don't need to wake us
                     JL_PROBE_RT_SLEEP_CHECK_TASK_WAKE(ptls);
                 }
+                ptls->timing_tls.scheduler_time += jl_hrtime() - t0;
                 return task;
             }
 
@@ -507,6 +510,7 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
 
             // the other threads will just wait for an individual wake signal to resume
             JULIA_DEBUG_SLEEPWAKE( ptls->sleep_enter = cycleclock() );
+            uint64_t tsleep0 = jl_hrtime();
             int8_t gc_state = jl_gc_safe_enter(ptls);
             uv_mutex_lock(&ptls->sleep_lock);
             while (may_sleep(ptls)) {
@@ -523,6 +527,7 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
             assert(jl_atomic_load_relaxed(&ptls->sleep_check_state) == not_sleeping);
             uv_mutex_unlock(&ptls->sleep_lock);
             JULIA_DEBUG_SLEEPWAKE( ptls->sleep_leave = cycleclock() );
+            ptls->timing_tls.sleep_time += jl_hrtime() - tsleep0;
             jl_gc_safe_leave(ptls, gc_state); // contains jl_gc_safepoint
             start_cycles = 0;
             if (task) {

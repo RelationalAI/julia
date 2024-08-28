@@ -127,6 +127,7 @@ struct _jl_bt_element_t;
 typedef struct {
     uint64_t start_time;
     uint64_t sleep_time;
+    uint64_t scheduler_time;
     uint64_t lock_spin_time;
     /* uint64_t lock_spin_entry; // needed to time Threads.SpinLock */
     uint64_t gc_time;
