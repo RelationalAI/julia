@@ -129,7 +129,6 @@ typedef struct {
     uint64_t sleep_time;
     uint64_t scheduler_time;
     uint64_t lock_spin_time;
-    /* uint64_t lock_spin_entry; // needed to time Threads.SpinLock */
     uint64_t gc_time;
 } jl_timing_tls_states_t;
 

@@ -820,19 +820,6 @@ JL_DLLEXPORT void jl_record_lock_spin_time(uint64_t time) JL_NOTSAFEPOINT
     ptls->timing_tls.lock_spin_time += time;
 }
 
-/* void jl_time_spin_lock_begin(void) */
-/* { */
-/*     jl_task_t *ct = jl_current_task; */
-/*     jl_ptls_t ptls = ct->ptls; */
-/*     ptls->timing_tls.user_lock_spin_entry = jl_hrtime(); */
-/* } */
-/* void jl_time_spin_lock_end(void) */
-/* { */
-/*     jl_task_t *ct = jl_current_task; */
-/*     jl_ptls_t ptls = ct->ptls; */
-/*     ptls->timing_tls.user_lock_spin_time = jl_hrtime() - ptls->timing_tls.user_lock_spin_entry; */
-/* } */
-
 void _jl_mutex_init(jl_mutex_t *lock, const char *name) JL_NOTSAFEPOINT
 {
     jl_atomic_store_relaxed(&lock->owner, (jl_task_t*)NULL);
@@ -855,13 +842,11 @@ void _jl_mutex_wait(jl_task_t *self, jl_mutex_t *lock, int safepoint)
         return;
     }
     JL_TIMING(LOCK_SPIN, LOCK_SPIN);
-    /* ptls = self->ptls; */
     uint64_t t0 = jl_hrtime();
     while (1) {
         if (owner == NULL && jl_atomic_cmpswap(&lock->owner, &owner, self)) {
             lock->count = 1;
             jl_profile_lock_acquired(lock);
-            /* ptls->timing_tls.lock_spin_time += jl_hrtime() - t0; */
             jl_record_lock_spin_time(jl_hrtime() - t0);
             return;
         }
