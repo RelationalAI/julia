@@ -114,11 +114,24 @@ function jit_total_bytes()
     return ccall(:jl_jit_total_bytes, Csize_t, ())
 end
 
-# eventually this should give user CPU time (in nanoseconds), but for now it's just the
-# time since Julia threads were started
-# user_cpu_time() = ccall(:jl_user_cpu_time, UInt64, ())
 thread_up_time() = ccall(:jl_thread_up_time, UInt64, ())
 thread_user_time() = ccall(:jl_thread_user_time, UInt64, ())
+# thread_user_time(tid::Integer) = ccall(:jl_thread_user_time, UInt64, (Cint,), Cint(tid))
+# function thread_user_time(pool::Symbol=:all)
+#     total = UInt64(0)
+#     pool in (:all, :default, :interactive) || throw(ArgumentError("invalid threadpool specified"))
+#     if pool === :all || pool === :default
+#         for tid in Threads.threadpooltids(:default)
+#             total += thread_user_time(tid)
+#         end
+#     end
+#     if pool === :all || pool === :interactive
+#         for tid in Threads.threadpooltids(:interactive)
+#             total += thread_user_time(tid)
+#         end
+#     end
+#     return total
+# end
 
 # print elapsed time, return expression value
 const _mem_units = ["byte", "KiB", "MiB", "GiB", "TiB", "PiB"]
