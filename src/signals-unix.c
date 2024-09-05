@@ -703,10 +703,58 @@ void trigger_profile_peek(void)
         }
     }
     bt_size_cur = 0; // clear profile buffer
-    if (jl_profile_start_timer() < 0)
+    if (jl_profile_start_timer(0) < 0)
         jl_safe_printf("ERROR: Could not start profile timer\n");
     else
         profile_autostop_time = jl_hrtime() + (profile_peek_duration * 1e9);
+}
+
+// assumes holding `jl_lock_stackwalk`
+void jl_profile_thread_unix(int tid, bt_context_t *signal_context)
+{
+    if (jl_profile_is_buffer_full()) {
+        // Buffer full: Delete the timer
+        jl_profile_stop_timer();
+        return;
+    }
+    // notify thread to stop
+    if (!jl_thread_suspend_and_get_state(tid, 1, &signal_context))
+        return;
+    // unwinding can fail, so keep track of the current state
+    // and restore from the SEGV handler if anything happens.
+    jl_jmp_buf *old_buf = jl_get_safe_restore();
+    jl_jmp_buf buf;
+
+    jl_set_safe_restore(&buf);
+    if (jl_setjmp(buf, 0)) {
+        jl_safe_printf("WARNING: profiler attempt to access an invalid memory location\n");
+    } else {
+        // Get backtrace data
+        bt_size_cur += rec_backtrace_ctx((jl_bt_element_t*)bt_data_prof + bt_size_cur,
+                bt_size_max - bt_size_cur - 1, &signal_context, NULL);
+    }
+    jl_set_safe_restore(old_buf);
+
+    jl_ptls_t ptls2 = jl_atomic_load_relaxed(&jl_all_tls_states)[tid];
+
+    // store threadid but add 1 as 0 is preserved to indicate end of block
+    bt_data_prof[bt_size_cur++].uintptr = ptls2->tid + 1;
+
+    // store task id (never null)
+    bt_data_prof[bt_size_cur++].jlvalue = (jl_value_t*)jl_atomic_load_relaxed(&ptls2->current_task);
+
+    // store cpu cycle clock
+    bt_data_prof[bt_size_cur++].uintptr = cycleclock();
+
+    // store whether thread is sleeping but add 1 as 0 is preserved to indicate end of block
+    bt_data_prof[bt_size_cur++].uintptr = jl_atomic_load_relaxed(&ptls2->sleep_check_state) + 1;
+
+    // Mark the end of this block with two 0's
+    bt_data_prof[bt_size_cur++].uintptr = 0;
+    bt_data_prof[bt_size_cur++].uintptr = 0;
+
+    // notify thread to resume
+    jl_thread_resume(tid);
 }
 
 static void *signal_listener(void *arg)
@@ -872,13 +920,13 @@ static void *signal_listener(void *arg)
                 // jl_profile_task()
             }
             else {
-                randperm = profile_get_randperm(nthreads);
+                int *randperm = profile_get_randperm(nthreads);
                 for (int idx = nthreads; idx-- > 0; ) {
                     // Stop the threads in the random or reverse round-robin order.
                     int i = randperm[idx];
                     // do backtrace for profiler
                     if (profile && running) {
-                        jl_profile_thread(i);
+                        jl_profile_thread_unix(i, &signal_context);
                     }
                 }
             }
@@ -923,53 +971,6 @@ static void *signal_listener(void *arg)
         }
     }
     return NULL;
-}
-// assumes holding `jl_lock_stackwalk`
-void jl_profile_thread(int tid)
-{
-    if (jl_profile_is_buffer_full()) {
-        // Buffer full: Delete the timer
-        jl_profile_stop_timer();
-        return;
-    }
-    // notify thread to stop
-    if (!jl_thread_suspend_and_get_state(i, 1, &signal_context))
-        return;
-    // unwinding can fail, so keep track of the current state
-    // and restore from the SEGV handler if anything happens.
-    jl_jmp_buf *old_buf = jl_get_safe_restore();
-    jl_jmp_buf buf;
-
-    jl_set_safe_restore(&buf);
-    if (jl_setjmp(buf, 0)) {
-        jl_safe_printf("WARNING: profiler attempt to access an invalid memory location\n");
-    } else {
-        // Get backtrace data
-        bt_size_cur += rec_backtrace_ctx((jl_bt_element_t*)bt_data_prof + bt_size_cur,
-                bt_size_max - bt_size_cur - 1, &signal_context, NULL);
-    }
-    jl_set_safe_restore(old_buf);
-
-    jl_ptls_t ptls2 = jl_atomic_load_relaxed(&jl_all_tls_states)[i];
-
-    // store threadid but add 1 as 0 is preserved to indicate end of block
-    bt_data_prof[bt_size_cur++].uintptr = ptls2->tid + 1;
-
-    // store task id (never null)
-    bt_data_prof[bt_size_cur++].jlvalue = (jl_value_t*)jl_atomic_load_relaxed(&ptls2->current_task);
-
-    // store cpu cycle clock
-    bt_data_prof[bt_size_cur++].uintptr = cycleclock();
-
-    // store whether thread is sleeping but add 1 as 0 is preserved to indicate end of block
-    bt_data_prof[bt_size_cur++].uintptr = jl_atomic_load_relaxed(&ptls2->sleep_check_state) + 1;
-
-    // Mark the end of this block with two 0's
-    bt_data_prof[bt_size_cur++].uintptr = 0;
-    bt_data_prof[bt_size_cur++].uintptr = 0;
-
-    // notify thread to resume
-    jl_thread_resume(tid);
 }
 
 void restore_signals(void)

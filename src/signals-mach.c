@@ -603,49 +603,8 @@ void jl_unlock_stackwalk(int lockret)
     jl_unlock_profile_mach(1, lockret);
 }
 
-void *mach_profile_listener(void *arg)
-{
-    (void)arg;
-    const int max_size = 512;
-    attach_exception_port(mach_thread_self(), 1);
-#ifdef LLVMLIBUNWIND
-    mach_profiler_thread = mach_thread_self();
-#endif
-    mig_reply_error_t *bufRequest = (mig_reply_error_t*)malloc_s(max_size);
-    while (1) {
-        kern_return_t ret = mach_msg(&bufRequest->Head, MACH_RCV_MSG,
-                                     0, max_size, profile_port,
-                                     MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-        HANDLE_MACH_ERROR("mach_msg", ret);
-        // sample each thread, round-robin style in reverse order
-        // (so that thread zero gets notified last)
-        int keymgr_locked = jl_lock_profile_mach(0);
-
-        if profile_all_tasks {
-            // t = select_task()
-            // jl_profile_task()
-        }
-        else {
-            int nthreads = jl_atomic_load_acquire(&jl_n_threads);
-            int *randperm = profile_get_randperm(nthreads);
-            for (int idx = nthreads; idx-- > 0; ) {
-                // Stop the threads in random order.
-                int i = randperm[idx];
-                jl_profile_thread(i);
-            }
-        }
-        jl_unlock_profile_mach(0, keymgr_locked);
-        if (running) {
-            jl_check_profile_autostop();
-            // Reset the alarm
-            kern_return_t ret = clock_alarm(clk, TIME_RELATIVE, timerprof, profile_port);
-            HANDLE_MACH_ERROR("clock_alarm", ret)
-        }
-    }
-}
-
 // assumes holding `jl_lock_profile_mach`
-void jl_profile_thread(int tid)
+void jl_profile_thread_mach(int tid)
 {
     // if there is no space left, return early
     if (jl_profile_is_buffer_full()) {
@@ -719,6 +678,47 @@ void jl_profile_thread(int tid)
     }
     // We're done! Resume the thread.
     jl_thread_resume(tid);
+}
+
+void *mach_profile_listener(void *arg)
+{
+    (void)arg;
+    const int max_size = 512;
+    attach_exception_port(mach_thread_self(), 1);
+#ifdef LLVMLIBUNWIND
+    mach_profiler_thread = mach_thread_self();
+#endif
+    mig_reply_error_t *bufRequest = (mig_reply_error_t*)malloc_s(max_size);
+    while (1) {
+        kern_return_t ret = mach_msg(&bufRequest->Head, MACH_RCV_MSG,
+                                     0, max_size, profile_port,
+                                     MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+        HANDLE_MACH_ERROR("mach_msg", ret);
+        // sample each thread, round-robin style in reverse order
+        // (so that thread zero gets notified last)
+        int keymgr_locked = jl_lock_profile_mach(0);
+
+        if (profile_all_tasks) {
+            // t = select_task()
+            // jl_profile_task()
+        }
+        else {
+            int nthreads = jl_atomic_load_acquire(&jl_n_threads);
+            int *randperm = profile_get_randperm(nthreads);
+            for (int idx = nthreads; idx-- > 0; ) {
+                // Stop the threads in random order.
+                int i = randperm[idx];
+                jl_profile_thread_mach(i);
+            }
+        }
+        jl_unlock_profile_mach(0, keymgr_locked);
+        if (running) {
+            jl_check_profile_autostop();
+            // Reset the alarm
+            kern_return_t ret = clock_alarm(clk, TIME_RELATIVE, timerprof, profile_port);
+            HANDLE_MACH_ERROR("clock_alarm", ret)
+        }
+    }
 }
 
 
