@@ -562,7 +562,7 @@ int timer_graceperiod_elapsed(void)
 static timer_t timerprof;
 static struct itimerspec itsprof;
 
-JL_DLLEXPORT int jl_profile_start_timer(void)
+JL_DLLEXPORT int jl_profile_start_timer(uint8_t all_tasks)
 {
     struct sigevent sigprof;
 
@@ -573,8 +573,10 @@ JL_DLLEXPORT int jl_profile_start_timer(void)
     sigprof.sigev_value.sival_ptr = &timerprof;
     // Because SIGUSR1 is multipurpose, set `running` before so that we know that the first SIGUSR1 came from the timer
     running = 1;
+    profile_all_tasks = all_tasks;
     if (timer_create(CLOCK_REALTIME, &sigprof, &timerprof) == -1) {
         running = 0;
+        profile_all_tasks = 0;
         return -2;
     }
 
@@ -585,6 +587,7 @@ JL_DLLEXPORT int jl_profile_start_timer(void)
     itsprof.it_value.tv_nsec = nsecprof % GIGA;
     if (timer_settime(timerprof, 0, &itsprof, NULL) == -1) {
         running = 0;
+        profile_all_tasks = 0;
         return -3;
     }
     return 0;

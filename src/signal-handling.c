@@ -24,10 +24,11 @@ static volatile size_t bt_size_max = 0;
 static volatile size_t bt_size_cur = 0;
 static volatile uint64_t nsecprof = 0;
 static volatile int running = 0;
+static volatile int profile_all_tasks = 0;
 static const    uint64_t GIGA = 1000000000ULL;
 // Timers to take samples at intervals
 JL_DLLEXPORT void jl_profile_stop_timer(void);
-JL_DLLEXPORT int jl_profile_start_timer(void);
+JL_DLLEXPORT int jl_profile_start_timer(uint8_t);
 // File-descriptor for safe logging on signal handling
 int jl_sig_fd;
 

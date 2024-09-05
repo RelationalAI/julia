@@ -31,6 +31,23 @@ macro profile(ex)
     end
 end
 
+"""
+    @profile_all
+
+`@profile <expression>` runs your expression while taking periodic backtraces of a sample of all live tasks (both running and not running).
+These are appended to an internal buffer of backtraces.
+"""
+macro profile_all(ex)
+    return quote
+        try
+            start_timer(all_tasks=true)
+            $(esc(ex))
+        finally
+            stop_timer()
+        end
+    end
+end
+
 # An internal function called to show the report after an information request (SIGINFO or SIGUSR1).
 function _peek_report()
     iob = IOBuffer()
@@ -562,9 +579,9 @@ Julia, and examine the resulting `*.mem` files.
 clear_malloc_data() = ccall(:jl_clear_malloc_data, Cvoid, ())
 
 # C wrappers
-function start_timer()
+function start_timer(all_tasks::Bool=false)
     check_init() # if the profile buffer hasn't been initialized, initialize with default size
-    status = ccall(:jl_profile_start_timer, Cint, ())
+    status = ccall(:jl_profile_start_timer, Cint, (Bool,), all_tasks)
     if status < 0
         error(error_codes[status])
     end

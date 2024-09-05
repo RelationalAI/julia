@@ -710,7 +710,7 @@ void *mach_profile_listener(void *arg)
     }
 }
 
-JL_DLLEXPORT int jl_profile_start_timer(void)
+JL_DLLEXPORT int jl_profile_start_timer(uint8_t all_tasks)
 {
     kern_return_t ret;
     if (!profile_started) {
@@ -740,6 +740,7 @@ JL_DLLEXPORT int jl_profile_start_timer(void)
     timerprof.tv_nsec = nsecprof%GIGA;
 
     running = 1;
+    profile_all_tasks = all_tasks;
     // ensure the alarm is running
     ret = clock_alarm(clk, TIME_RELATIVE, timerprof, profile_port);
     HANDLE_MACH_ERROR("clock_alarm", ret);
@@ -750,4 +751,5 @@ JL_DLLEXPORT int jl_profile_start_timer(void)
 JL_DLLEXPORT void jl_profile_stop_timer(void)
 {
     running = 0;
+    profile_all_tasks = 0;
 }

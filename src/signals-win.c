@@ -449,7 +449,7 @@ static DWORD WINAPI profile_bt( LPVOID lparam )
 
 static volatile TIMECAPS timecaps;
 
-JL_DLLEXPORT int jl_profile_start_timer(void)
+JL_DLLEXPORT int jl_profile_start_timer(uint8_t all_tasks)
 {
     if (hBtThread == NULL) {
 
@@ -483,6 +483,7 @@ JL_DLLEXPORT int jl_profile_start_timer(void)
         if (TIMERR_NOERROR != timeBeginPeriod(timecaps.wPeriodMin))
             timecaps.wPeriodMin = 0;
     }
+    profile_all_tasks = all_tasks;
     running = 1; // set `running` finally
     return 0;
 }
@@ -491,6 +492,7 @@ JL_DLLEXPORT void jl_profile_stop_timer(void)
     if (running && timecaps.wPeriodMin)
         timeEndPeriod(timecaps.wPeriodMin);
     running = 0;
+    profile_all_tasks = 0;
 }
 
 void jl_install_default_signal_handlers(void)
