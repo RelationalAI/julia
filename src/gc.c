@@ -21,11 +21,17 @@ int jl_n_sweepthreads;
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
 // Number of threads sweeping
-_Atomic(int) gc_n_threads_sweeping;
+_Atomic(int) gc_n_threads_sweeping_pools;
+// Number of threads sweeping stacks
+_Atomic(int) gc_n_threads_sweeping_stacks;
 // Temporary for the `ptls->gc_tls.page_metadata_allocd` used during parallel sweeping (padded to avoid false sharing)
 _Atomic(jl_gc_padded_page_stack_t *) gc_allocd_scratch;
 // `tid` of mutator thread that triggered GC
 _Atomic(int) gc_master_tid;
+// counter for sharing work when sweeping stacks
+_Atomic(int) gc_ptls_sweep_idx;
+// counter for round robin of giving back stack pages to the OS
+_Atomic(int) gc_stack_free_idx;
 // `tid` of first GC thread
 int gc_first_tid;
 // Mutex/cond used to synchronize wakeup of GC threads on parallel marking
@@ -1525,6 +1531,44 @@ static void gc_sweep_other(jl_ptls_t ptls, int sweep_full) JL_NOTSAFEPOINT
     gc_num.total_sweep_free_mallocd_memory_time += t_free_mallocd_memory_end - t_free_mallocd_memory_start;
 }
 
+// wake up all threads to sweep the stacks
+void gc_sweep_wake_all_stacks(jl_ptls_t ptls) JL_NOTSAFEPOINT
+{
+    uv_mutex_lock(&gc_threads_lock);
+    int first = gc_first_parallel_collector_thread_id();
+    int last = gc_last_parallel_collector_thread_id();
+    for (int i = first; i <= last; i++) {
+        jl_ptls_t ptls2 = gc_all_tls_states[i];
+        gc_check_ptls_of_parallel_collector_thread(ptls2);
+        jl_atomic_fetch_add(&ptls2->gc_tls.gc_stack_sweep_requested, 1);
+    }
+    uv_cond_broadcast(&gc_threads_cond);
+    uv_mutex_unlock(&gc_threads_lock);
+    return;
+}
+
+void gc_sweep_wait_for_all_stacks(void) JL_NOTSAFEPOINT
+{
+    while ((jl_atomic_load_acquire(&gc_ptls_sweep_idx) >= 0 ) || jl_atomic_load_acquire(&gc_n_threads_sweeping_stacks) != 0) {
+        jl_cpu_pause();
+    }
+}
+
+void sweep_stack_pools(jl_ptls_t ptls) JL_NOTSAFEPOINT
+{
+    // initialize ptls index for parallel sweeping of stack pools
+    assert(gc_n_threads);
+    int stack_free_idx = jl_atomic_load_relaxed(&gc_stack_free_idx);
+    if (stack_free_idx + 1 == gc_n_threads)
+        jl_atomic_store_relaxed(&gc_stack_free_idx, 0);
+    else
+        jl_atomic_store_relaxed(&gc_stack_free_idx, stack_free_idx + 1);
+    jl_atomic_store_release(&gc_ptls_sweep_idx, gc_n_threads - 1); // idx == gc_n_threads = release stacks to the OS so it's serial
+    gc_sweep_wake_all_stacks(ptls);
+    sweep_stack_pool_loop();
+    gc_sweep_wait_for_all_stacks();
+}
+
 static void gc_pool_sync_nfree(jl_gc_pagemeta_t *pg, jl_taggedvalue_t *last) JL_NOTSAFEPOINT
 {
     assert(pg->fl_begin_offset != UINT16_MAX);
@@ -1639,7 +1683,7 @@ void gc_sweep_wake_all(jl_ptls_t ptls, jl_gc_padded_page_stack_t *new_gc_allocd_
 void gc_sweep_wait_for_all(void)
 {
     jl_atomic_store(&gc_allocd_scratch, NULL);
-    while (jl_atomic_load_relaxed(&gc_n_threads_sweeping) != 0) {
+    while (jl_atomic_load_acquire(&gc_n_threads_sweeping_pools) != 0) {
         jl_cpu_pause();
     }
 }
@@ -1647,7 +1691,7 @@ void gc_sweep_wait_for_all(void)
 // sweep all pools
 void gc_sweep_pool_parallel(jl_ptls_t ptls)
 {
-    jl_atomic_fetch_add(&gc_n_threads_sweeping, 1);
+    jl_atomic_fetch_add(&gc_n_threads_sweeping_pools, 1);
     jl_gc_padded_page_stack_t *allocd_scratch = jl_atomic_load(&gc_allocd_scratch);
     if (allocd_scratch != NULL) {
         gc_page_profiler_serializer_t serializer = gc_page_serializer_create();
@@ -1692,7 +1736,7 @@ void gc_sweep_pool_parallel(jl_ptls_t ptls)
         }
         gc_page_serializer_destroy(&serializer);
     }
-    jl_atomic_fetch_add(&gc_n_threads_sweeping, -1);
+    jl_atomic_fetch_add(&gc_n_threads_sweeping_pools, -1);
 }
 
 // free all pages (i.e. through `madvise` on Linux) that were lazily freed
@@ -3604,7 +3648,7 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
 #endif
         current_sweep_full = sweep_full;
         sweep_weak_refs();
-        sweep_stack_pools();
+        sweep_stack_pools(ptls);
         gc_sweep_foreign_objs();
         gc_sweep_other(ptls, sweep_full);
         gc_scrub();
