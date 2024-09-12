@@ -4068,7 +4068,7 @@ f(x) = yt(x)
                                (newlam    (compact-and-renumber (linearize (car exprs)) 'none 0)))
                           `(toplevel-butfirst
                             (block ,@sp-inits
-                                   (method ,(cadr e) ,(cl-convert sig fname lam namemap defined toplevel interp opaq parsed-method-stack globals locals)
+                                   (method ,name ,(cl-convert sig fname lam namemap defined toplevel interp opaq parsed-method-stack globals locals)
                                            ,(julia-bq-macro newlam)))
                             ,@top-stmts))))
 
