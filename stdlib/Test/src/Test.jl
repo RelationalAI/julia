@@ -1840,14 +1840,14 @@ end
 #-----------------------------------------------------------------------
 # Various helper methods for test sets
 
-const CURRENT_TESTSET = Base.ScopedValue{AbstractTestSet}(FallbackTestSet())
-const TESTSET_DEPTH = Base.ScopedValue{Int}(0)
+const CURRENT_TESTSET = Base.ScopedValues.ScopedValue{AbstractTestSet}(FallbackTestSet())
+const TESTSET_DEPTH = Base.ScopedValues.ScopedValue{Int}(0)
 
 macro with_testset(ts, expr)
     quote
         ts = $(esc(ts))
         $(Expr(:tryfinally,
-            :(Base.@with(CURRENT_TESTSET => ts, TESTSET_DEPTH => get_testset_depth() + 1, $(esc(expr)))),
+            :(Base.ScopedValues.@with(CURRENT_TESTSET => ts, TESTSET_DEPTH => get_testset_depth() + 1, $(esc(expr)))),
             :(finish(ts))
         ))
     end
