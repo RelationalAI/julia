@@ -718,7 +718,7 @@ void jl_profile_thread_unix(int tid, bt_context_t *signal_context)
         return;
     }
     // notify thread to stop
-    if (!jl_thread_suspend_and_get_state(tid, 1, &signal_context))
+    if (!jl_thread_suspend_and_get_state(tid, 1, signal_context))
         return;
     // unwinding can fail, so keep track of the current state
     // and restore from the SEGV handler if anything happens.
@@ -731,7 +731,7 @@ void jl_profile_thread_unix(int tid, bt_context_t *signal_context)
     } else {
         // Get backtrace data
         bt_size_cur += rec_backtrace_ctx((jl_bt_element_t*)bt_data_prof + bt_size_cur,
-                bt_size_max - bt_size_cur - 1, &signal_context, NULL);
+                bt_size_max - bt_size_cur - 1, signal_context, NULL);
     }
     jl_set_safe_restore(old_buf);
 
@@ -922,7 +922,7 @@ static void *signal_listener(void *arg)
             else {
                 int *randperm = profile_get_randperm(nthreads);
                 for (int idx = nthreads; idx-- > 0; ) {
-                    // Stop the threads in the random or reverse round-robin order.
+                    // Stop the threads in the random order.
                     int i = randperm[idx];
                     // do backtrace for profiler
                     if (profile && running) {
