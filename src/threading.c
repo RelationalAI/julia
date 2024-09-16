@@ -60,9 +60,9 @@ JL_DLLEXPORT uint64_t jl_thread_up_time(void)
 {
     return jl_hrtime() - jl_thread_start_time;
 }
-JL_DLLEXPORT uint64_t jl_thread_user_time(void)
+JL_DLLEXPORT uint64_t jl_thread_user_time(uint8_t tid)
 {
-    jl_ptls_t ptls = jl_current_task->ptls;
+    jl_ptls_t ptls = jl_atomic_load_relaxed(&jl_all_tls_states)[tid];
     jl_timing_tls_states_t *timing = &ptls->timing_tls;
     return jl_thread_up_time() - timing->gc_time - timing->lock_spin_time;
 }

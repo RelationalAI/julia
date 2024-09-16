@@ -115,23 +115,30 @@ function jit_total_bytes()
 end
 
 thread_up_time() = ccall(:jl_thread_up_time, UInt64, ())
-thread_user_time() = ccall(:jl_thread_user_time, UInt64, ())
-# thread_user_time(tid::Integer) = ccall(:jl_thread_user_time, UInt64, (Cint,), Cint(tid))
-# function thread_user_time(pool::Symbol=:all)
-#     total = UInt64(0)
-#     pool in (:all, :default, :interactive) || throw(ArgumentError("invalid threadpool specified"))
-#     if pool === :all || pool === :default
-#         for tid in Threads.threadpooltids(:default)
-#             total += thread_user_time(tid)
-#         end
-#     end
-#     if pool === :all || pool === :interactive
-#         for tid in Threads.threadpooltids(:interactive)
-#             total += thread_user_time(tid)
-#         end
-#     end
-#     return total
-# end
+
+_unsafe_thread_user_time(tid::Integer) = ccall(:jl_thread_user_time, UInt64, (Cint,), Cint(tid))
+
+function thread_user_time(tid::Integer)
+    max_tid = Threads.threadpoolsize(:interactive) + Threads.threadpoolsize(:default)
+    0 < tid ≤ max_tid || throw(ArgumentError("invalid thread id `$(tid)`"))
+    return _unsafe_thread_user_time(tid)
+end
+
+function thread_user_time(pool::Symbol=:all)
+    total = UInt64(0)
+    pool in (:all, :default, :interactive) || throw(ArgumentError("invalid threadpool `$(repr(pool))`"))
+    if pool === :all || pool === :default
+        for tid in Threads.threadpooltids(:default)
+            total += _unsafe_thread_user_time(tid)
+        end
+    end
+    if pool === :all || pool === :interactive
+        for tid in Threads.threadpooltids(:interactive)
+            total += _unsafe_thread_user_time(tid)
+        end
+    end
+    return total
+end
 
 # print elapsed time, return expression value
 const _mem_units = ["byte", "KiB", "MiB", "GiB", "TiB", "PiB"]
