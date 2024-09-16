@@ -228,8 +228,8 @@
 (define (is-method? x)
   (if (and (pair? x) (eq? (car x) 'method))
       (let ((name (cadr x)))
-        (if (and (pair? name) (eq? (car name) 'globalref))
-            (let ((name (caddr name)))
+        (if (and (pair? name) (eq? (car name) 'outerref))
+            (let ((name (cadr name)))
               (if (symbol? name)
                   #t
                   #f))
@@ -243,7 +243,6 @@
      (let ((name (if (or (length= m 2) (not (pair? name)) (not (quoted? name))) name (cadr name))))
        (cond ((not (pair? name)) name)
              ((eq? (car name) 'outerref) (cadr name))
-             ;((eq? (car name) 'globalref) (caddr name))
              (else name)))))
 
 ;; extract static parameter names from a (method ...) expression
