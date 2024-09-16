@@ -64,7 +64,7 @@ JL_DLLEXPORT uint64_t jl_thread_user_time(uint8_t tid)
 {
     jl_ptls_t ptls = jl_atomic_load_relaxed(&jl_all_tls_states)[tid];
     jl_timing_tls_states_t *timing = &ptls->timing_tls;
-    return jl_thread_up_time() - timing->gc_time - timing->lock_spin_time;
+    return jl_thread_up_time() - timing->gc_time;
 }
 
 JL_DLLEXPORT void *jl_get_ptls_states(void)
@@ -813,12 +813,12 @@ JL_DLLEXPORT void jl_exit_threaded_region(void)
 
 // Profiling stubs
 
-JL_DLLEXPORT void jl_record_lock_spin_time(uint64_t time) JL_NOTSAFEPOINT
-{
-    jl_task_t *ct = jl_current_task;
-    jl_ptls_t ptls = ct->ptls;
-    ptls->timing_tls.lock_spin_time += time;
-}
+/* JL_DLLEXPORT void jl_record_lock_spin_time(uint64_t time) JL_NOTSAFEPOINT */
+/* { */
+/*     jl_task_t *ct = jl_current_task; */
+/*     jl_ptls_t ptls = ct->ptls; */
+/*     ptls->timing_tls.lock_spin_time += time; */
+/* } */
 
 void _jl_mutex_init(jl_mutex_t *lock, const char *name) JL_NOTSAFEPOINT
 {
@@ -842,12 +842,12 @@ void _jl_mutex_wait(jl_task_t *self, jl_mutex_t *lock, int safepoint)
         return;
     }
     JL_TIMING(LOCK_SPIN, LOCK_SPIN);
-    uint64_t t0 = jl_hrtime();
+    /* uint64_t t0 = jl_hrtime(); */
     while (1) {
         if (owner == NULL && jl_atomic_cmpswap(&lock->owner, &owner, self)) {
             lock->count = 1;
             jl_profile_lock_acquired(lock);
-            jl_record_lock_spin_time(jl_hrtime() - t0);
+            /* jl_record_lock_spin_time(jl_hrtime() - t0); */
             return;
         }
         if (safepoint) {

@@ -39,10 +39,10 @@ end
 Base.assert_havelock(l::SpinLock) = islocked(l) ? nothing : Base.concurrency_violation()
 
 function lock(l::SpinLock)
-    t0 = time_ns()
+    # t0 = time_ns()
     while true
         if @inline trylock(l)
-            ccall(:jl_record_lock_spin_time, Cvoid, (Culonglong,), time_ns() - t0)
+            # ccall(:jl_record_lock_spin_time, Cvoid, (Culonglong,), time_ns() - t0)
             return
         end
         ccall(:jl_cpu_suspend, Cvoid, ())
