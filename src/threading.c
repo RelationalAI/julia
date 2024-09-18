@@ -1156,13 +1156,15 @@ void jl_heartbeat_threadfun(void *arg)
         tchb = jl_hrtime() - t0;
 
         // adjust the next sleep duration based on how long the heartbeat
-        // check took
+        // check took, but if it took too long then use the normal duration
         rs = 1;
         while (tchb > 1e9) {
             rs++;
             tchb -= 1e9;
         }
-        s = heartbeat_interval_s - rs;
+        if (rs < heartbeat_interval_s) {
+            s = heartbeat_interval_s - rs;
+        }
         ns = 1e9 - tchb;
     }
 }
