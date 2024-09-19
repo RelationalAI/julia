@@ -1175,7 +1175,9 @@ extern int jl_heartbeat_resume(void);
 JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
 {
     // disable heartbeats to prevent heartbeat loss while running this,
-    // unless this is called from the heartbeat thread
+    // unless this is called from the heartbeat thread itself; in that
+    // situation, the thread is busy running this and it will not be
+    // updating the missed heartbeats counter
     if (!jl_inside_heartbeat_thread()) {
         jl_heartbeat_pause();
     }
