@@ -876,8 +876,18 @@ void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
     jl_ptls_t ptls = ct->ptls;
     ptls->bt_size = 0;
     if (t == ct) {
-        ptls->bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE, 0);
-        return;
+        // Record into the profile buffer
+        if (running && profile_all_tasks) {
+            bt_size_cur += rec_backtrace(
+                (jl_bt_element_t*)bt_data_prof + bt_size_cur,
+                bt_size_max - bt_size_cur - 1,
+                0);
+            return;
+        }
+        else {
+            ptls->bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE, 0);
+            return;
+        }
     }
     bt_context_t *context = NULL;
     bt_context_t c;
