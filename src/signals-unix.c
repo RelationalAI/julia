@@ -709,16 +709,22 @@ void trigger_profile_peek(void)
         profile_autostop_time = jl_hrtime() + (profile_peek_duration * 1e9);
 }
 
-// Return a task to profile (for all_task profiler)
-// We need to select a task uniformly at random from the set of all tasks.
-// TODO(PR) Optimize this!
+// assumes holding `jl_lock_stackwalk`
 // TODO(PR) don't export this
-JL_DLLEXPORT jl_task_t *jl_profile_select_task(size_t nthreads)
+JL_DLLEXPORT void jl_profile_task_unix(size_t nthreads, bt_context_t *signal_context)
 {
+    if (jl_profile_is_buffer_full()) {
+        // Buffer full: Delete the timer
+        jl_profile_stop_timer();
+        return;
+    }
+
+    // Select a task at random to profile. Racy: `live_tasks` can change at any time.
+    // TODO(PR) Optimize this!
     jl_ptls_t *allstates = jl_atomic_load_relaxed(&jl_all_tls_states);
-    // Racy selection of a task; `live_tasks` can change at any time.
-    // TODO: skip GC threads?
+    jl_task_t *t;
     size_t total_tasks = 0;
+    // TODO: skip GC threads?
     for (int i = nthreads; i-- > 0; ) {
         jl_ptls_t ptls = allstates[i];
         small_arraylist_t *live_tasks = &ptls->gc_tls.heap.live_tasks;
@@ -731,25 +737,16 @@ JL_DLLEXPORT jl_task_t *jl_profile_select_task(size_t nthreads)
         size_t ntasks = mtarraylist_length(live_tasks);
         if (rn <= ntasks) {
             // NULL if rn is out of bounds
-            return (jl_task_t*)mtarraylist_get(live_tasks, rn);
+            t = (jl_task_t*)mtarraylist_get(live_tasks, rn);
         }
         rn -= ntasks;
-    }
-}
-
-// assumes holding `jl_lock_stackwalk`
-void jl_profile_task_unix(jl_task_t *t, bt_context_t *signal_context)
-{
-    if (jl_profile_is_buffer_full()) {
-        // Buffer full: Delete the timer
-        jl_profile_stop_timer();
-        return;
     }
     if (t == NULL)
         return;
     int t_state = jl_atomic_load_relaxed(&t->_state);
     if (t_state == JL_TASK_STATE_DONE)
         return;
+    jl_safe_printf("Profiling task %p\n", t);
     // jl_rec_backtrace(t);
     // TODO write the recorded backtrace to the profile buffer
 }
@@ -960,10 +957,7 @@ static void *signal_listener(void *arg)
         }
         else if (profile) {
             if (profile_all_tasks) {
-                jl_task_t *t = jl_profile_select_task(nthreads);
-                jl_safe_printf("Profiling task %p\n", (void*)t);
-                // if t is NULL, skip
-                // jl_profile_task_unix(t, &signal_context);
+                jl_profile_task_unix(nthreads, &signal_context);
             }
             else {
                 int *randperm = profile_get_randperm(nthreads);
