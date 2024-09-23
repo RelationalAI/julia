@@ -10,12 +10,6 @@
 #include "threading.h"
 #include "julia_assert.h"
 
-extern volatile jl_bt_element_t *bt_data_prof;
-extern volatile size_t bt_size_max;
-extern volatile size_t bt_size_cur;
-extern volatile int running;
-extern volatile int profile_all_tasks;
-
 // define `jl_unw_get` as a macro, since (like setjmp)
 // returning from the callee function will invalidate the context
 #ifdef _OS_WINDOWS_
@@ -876,7 +870,7 @@ _os_ptr_munge(uintptr_t ptr)
 
 extern bt_context_t *jl_to_bt_context(void *sigctx);
 
-static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
+void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
 {
     jl_task_t *ct = jl_current_task;
     jl_ptls_t ptls = ct->ptls;

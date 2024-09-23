@@ -206,6 +206,13 @@ JL_DLLEXPORT void jl_unlock_profile_wr(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEA
 int jl_lock_stackwalk(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_ENTER;
 void jl_unlock_stackwalk(int lockret) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEAVE;
 
+void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT;
+extern volatile struct _jl_bt_element_t *bt_data_prof;
+extern volatile size_t bt_size_max;
+extern volatile size_t bt_size_cur;
+extern volatile int running;
+extern volatile int profile_all_tasks;
+
 // number of cycles since power-on
 static inline uint64_t cycleclock(void) JL_NOTSAFEPOINT
 {

@@ -9,6 +9,10 @@
 #include <pthread.h>
 #include <time.h>
 #include <errno.h>
+
+#include "julia.h"
+#include "julia_internal.h"
+
 #if defined(_OS_DARWIN_) && !defined(MAP_ANONYMOUS)
 #define MAP_ANONYMOUS MAP_ANON
 #endif
@@ -747,8 +751,8 @@ JL_DLLEXPORT void jl_profile_task_unix(size_t nthreads, bt_context_t *signal_con
     if (t_state == JL_TASK_STATE_DONE)
         return;
     jl_safe_printf("Profiling task %p\n", t);
-    // jl_rec_backtrace(t);
-    // TODO write the recorded backtrace to the profile buffer
+
+    jl_rec_backtrace(t);
 }
 
 void jl_profile_thread_unix(int tid, bt_context_t *signal_context)
@@ -937,8 +941,8 @@ static void *signal_listener(void *arg)
         bt_size = 0;
 #if !defined(JL_DISABLE_LIBUNWIND)
         bt_context_t signal_context;
-        int lockret = jl_lock_stackwalk();
         if (critical) {
+            int lockret = jl_lock_stackwalk();
             // sample each thread, round-robin style in reverse order
             // (so that thread zero gets notified last)
             for (int i = nthreads; i-- > 0; ) {
@@ -954,12 +958,15 @@ static void *signal_listener(void *arg)
                 bt_data[bt_size++].uintptr = 0;
                 jl_thread_resume(i);
             }
+            jl_unlock_stackwalk(lockret);
         }
         else if (profile) {
             if (profile_all_tasks) {
+                // Don't take the stackwalk lock here since it's already taken in `jl_rec_backtrace`
                 jl_profile_task_unix(nthreads, &signal_context);
             }
             else {
+                int lockret = jl_lock_stackwalk();
                 int *randperm = profile_get_randperm(nthreads);
                 for (int idx = nthreads; idx-- > 0; ) {
                     // Stop the threads in the random order.
@@ -969,9 +976,9 @@ static void *signal_listener(void *arg)
                         jl_profile_thread_unix(i, &signal_context);
                     }
                 }
+                jl_unlock_stackwalk(lockret);
             }
         }
-        jl_unlock_stackwalk(lockret);
 #ifndef HAVE_MACH
         if (profile && running) {
             jl_check_profile_autostop();
