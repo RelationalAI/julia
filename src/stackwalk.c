@@ -13,7 +13,7 @@
 extern volatile jl_bt_element_t *bt_data_prof;
 extern volatile size_t bt_size_max;
 extern volatile size_t bt_size_cur;
-extern volatile int profile_running;
+extern volatile int running;
 extern volatile int profile_all_tasks;
 
 // define `jl_unw_get` as a macro, since (like setjmp)
@@ -1115,19 +1115,24 @@ static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
      #pragma message("jl_rec_backtrace not defined for unknown task system")
 #endif
     }
-    if (profile_running && profile_all_tasks)
-        bt_size_cur += rec_backtrace_ctx(
-          (jl_bt_element_t*)bt_data_prof + bt_size_cur,
-          bt_size_max - bt_size_cur - 1,
-          signal_context,
-          NULL);
-
-    else if (context)
-        ptls->bt_size = rec_backtrace_ctx(
-            ptls->bt_data,
-            JL_MAX_BT_SIZE,
-            context,
-            t->gcstack);
+    if (context) {
+        // Record into the profile buffer
+        if (running && profile_all_tasks) {
+            bt_size_cur += rec_backtrace_ctx(
+                (jl_bt_element_t*)bt_data_prof + bt_size_cur,
+                bt_size_max - bt_size_cur - 1,
+                context,
+                NULL);
+        }
+        // Record into the buffer owned by the threads's TLS
+        else {
+            ptls->bt_size = rec_backtrace_ctx(
+                ptls->bt_data,
+                JL_MAX_BT_SIZE,
+                context,
+                t->gcstack);
+        }
+    }
     if (old == -1)
         jl_atomic_store_relaxed(&t->tid, old);
     else if (old != ptls->tid)
