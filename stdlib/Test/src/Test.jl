@@ -1704,7 +1704,8 @@ function testset_beginend_call(args, tests, source)
                 copy!(Random.get_tls_seed(), tls_seed_orig)
             end
         end
-        ts
+        # ts
+        finish(ts)
     end
     # preserve outer location if possible
     if tests isa Expr && tests.head === :block && !isempty(tests.args) && tests.args[1] isa LineNumberNode
