@@ -19,12 +19,12 @@ extern "C" {
 
 // Profiler control variables
 // Note: these "static" variables are also used in "signals-*.c"
-static volatile jl_bt_element_t *bt_data_prof = NULL;
-static volatile size_t bt_size_max = 0;
-static volatile size_t bt_size_cur = 0;
+volatile jl_bt_element_t *bt_data_prof = NULL;
+volatile size_t bt_size_max = 0;
+volatile size_t bt_size_cur = 0;
 static volatile uint64_t nsecprof = 0;
-static volatile int running = 0;
-static volatile int profile_all_tasks = 0;
+volatile int profile_running = 0;
+volatile int profile_all_tasks = 0;
 static const    uint64_t GIGA = 1000000000ULL;
 // Timers to take samples at intervals
 JL_DLLEXPORT void jl_profile_stop_timer(void);
