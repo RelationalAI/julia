@@ -753,6 +753,22 @@ JL_DLLEXPORT void jl_profile_task_unix(size_t nthreads, bt_context_t *signal_con
     jl_safe_printf("Profiling task %p\n", t);
 
     jl_rec_backtrace(t);
+
+    // store threadid but add 1 as 0 is preserved to indicate end of block
+    bt_data_prof[bt_size_cur++].uintptr = UINTPTR_MAX; // dummy value for now... Is this ever used when outputting the profile?
+
+    // store task id (never null)
+    bt_data_prof[bt_size_cur++].jlvalue = (jl_value_t*)t;
+
+    // store cpu cycle clock. XXX(Diogo, Nick): why are we recording the cycleclock here?
+    bt_data_prof[bt_size_cur++].uintptr = cycleclock();
+
+    // store whether thread is sleeping but add 1 as 0 is preserved to indicate end of block
+    bt_data_prof[bt_size_cur++].uintptr = UINTPTR_MAX; // dummy value for now... Is this ever used when outputting the profile?
+
+    // Mark the end of this block with two 0's
+    bt_data_prof[bt_size_cur++].uintptr = 0;
+    bt_data_prof[bt_size_cur++].uintptr = 0;
 }
 
 void jl_profile_thread_unix(int tid, bt_context_t *signal_context)
