@@ -11,24 +11,30 @@ export SpinLock
 # Atomic Locks
 ##########################################
 
-abstract type AbstractSpinLock <: AbstractLock end
-
 """
-    SpinLock()
+    abstract type AbstractSpinLock <: AbstractLock end
 
-Create a non-reentrant, test-and-test-and-set spin lock.
+Non-reentrant, test-and-set spin locks.
 Recursive use will result in a deadlock.
 This kind of lock should only be used around code that takes little time
 to execute and does not block (e.g. perform I/O).
 In general, [`ReentrantLock`](@ref) should be used instead.
 
 Each [`lock`](@ref) must be matched with an [`unlock`](@ref).
-If [`!islocked(lck::SpinLock)`](@ref islocked) holds, [`trylock(lck)`](@ref trylock)
-succeeds unless there are other tasks attempting to hold the lock "at the same time."
+If [`!islocked(lck::AbstractSpinLock)`](@ref islocked) holds, 
+[`trylock(lck)`](@ref trylock) succeeds unless there are other tasks attempting to hold the
+lock "at the same time."
 
 Test-and-test-and-set spin locks are quickest up to about 30ish
 contending threads. If you have more contention than that, different
 synchronization approaches should be considered.
+"""
+abstract type AbstractSpinLock <: AbstractLock end
+
+"""
+    SpinLock() <: AbstractSpinLock
+
+Spinlocks are not padded, and so may suffer from false sharing.
 """
 mutable struct SpinLock <: AbstractSpinLock
     # we make this much larger than necessary to minimize false-sharing
@@ -40,6 +46,12 @@ end
 # processors.
 const CACHE_LINE_SIZE = 64
 
+"""
+    PaddedSpinLock() <: AbstractSpinLock
+
+PaddedSpinLocks are padded so that each is guaranteed to be on its own cache line, to avoid
+false sharing.
+"""
 mutable struct PaddedSpinLock <: AbstractSpinLock
     # we make this much larger than necessary to minimize false-sharing
     _padding_before::NTuple{max(0, CACHE_LINE_SIZE - sizeof(Int)), UInt8}
