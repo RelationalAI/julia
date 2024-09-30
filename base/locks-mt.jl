@@ -11,6 +11,8 @@ export SpinLock
 # Atomic Locks
 ##########################################
 
+abstract type AbstractSpinLock <: AbstractLock end
+
 """
     SpinLock()
 
@@ -28,17 +30,29 @@ Test-and-test-and-set spin locks are quickest up to about 30ish
 contending threads. If you have more contention than that, different
 synchronization approaches should be considered.
 """
-mutable struct SpinLock <: AbstractLock
+mutable struct SpinLock <: AbstractSpinLock
     # we make this much larger than necessary to minimize false-sharing
     @atomic owned::Int
     SpinLock() = new(0)
 end
 
+# TODO: Use CPUID to figure out the cache line size?  Meanwhile, this is correct for most
+# processors.
+const CACHE_LINE_SIZE = 64
+
+mutable struct PaddedSpinLock <: AbstractSpinLock
+    # we make this much larger than necessary to minimize false-sharing
+    _padding_before::NTuple{max(0, CACHE_LINE_SIZE - sizeof(Int)), UInt8}
+    @atomic owned::Int
+    _padding_after::NTuple{max(0, CACHE_LINE_SIZE - sizeof(Int)), UInt8}
+    PaddedSpinLock() = new(0)
+end
+
 # Note: this cannot assert that the lock is held by the correct thread, because we do not
 # track which thread locked it. Users beware.
-Base.assert_havelock(l::SpinLock) = islocked(l) ? nothing : Base.concurrency_violation()
+Base.assert_havelock(l::AbstractSpinLock) = islocked(l) ? nothing : Base.concurrency_violation()
 
-function lock(l::SpinLock)
+function lock(l::AbstractSpinLock)
     while true
         if @inline trylock(l)
             return
@@ -49,7 +63,7 @@ function lock(l::SpinLock)
     end
 end
 
-function trylock(l::SpinLock)
+function trylock(l::AbstractSpinLock)
     if l.owned == 0
         GC.disable_finalizers()
         p = @atomicswap :acquire l.owned = 1
@@ -61,7 +75,7 @@ function trylock(l::SpinLock)
     return false
 end
 
-function unlock(l::SpinLock)
+function unlock(l::AbstractSpinLock)
     if (@atomicswap :release l.owned = 0) == 0
         error("unlock count must match lock count")
     end
@@ -70,6 +84,6 @@ function unlock(l::SpinLock)
     return
 end
 
-function islocked(l::SpinLock)
+function islocked(l::AbstractSpinLock)
     return (@atomic :monotonic l.owned) != 0
 end
