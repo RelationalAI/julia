@@ -156,7 +156,7 @@ void jl_safepoint_end_gc(void)
     uv_cond_broadcast(&safepoint_cond);
 }
 
-void jl_safepoint_wait_gc(void)
+void _jl_safepoint_wait_gc(void)
 {
     jl_task_t *ct = jl_current_task; (void)ct;
     JL_TIMING_SUSPEND_TASK(GC_SAFEPOINT, ct);
@@ -173,6 +173,13 @@ void jl_safepoint_wait_gc(void)
             uv_cond_wait(&safepoint_cond, &safepoint_lock);
         uv_mutex_unlock(&safepoint_lock);
     }
+}
+
+void jl_safepoint_wait_gc(void)
+{
+    uint64_t t0 = jl_record_time_for_tls_metric();
+    _jl_safepoint_wait_gc();
+    jl_increment_timing_tls_metric(jl_current_task->ptls, gc_time, jl_record_time_for_tls_metric() - t0);
 }
 
 void jl_safepoint_enable_sigint(void)

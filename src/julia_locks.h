@@ -22,10 +22,14 @@ JL_DLLEXPORT int _jl_mutex_trylock_nogc(jl_task_t *self, jl_mutex_t *lock) JL_NO
 JL_DLLEXPORT int _jl_mutex_trylock(jl_task_t *self, jl_mutex_t *lock);
 JL_DLLEXPORT void _jl_mutex_unlock(jl_task_t *self, jl_mutex_t *lock);
 JL_DLLEXPORT void _jl_mutex_unlock_nogc(jl_mutex_t *lock) JL_NOTSAFEPOINT;
+// Unfortunately we can't include `julia_internal.h` here, so we need to forward declare this
+JL_DLLEXPORT uint64_t jl_record_time_for_tls_metric(void) JL_NOTSAFEPOINT;
 
 static inline void jl_mutex_wait(jl_mutex_t *lock, int safepoint)
 {
+    uint64_t t0 = jl_record_time_for_tls_metric();
     _jl_mutex_wait(jl_current_task, lock, safepoint);
+    jl_increment_timing_tls_metric(jl_current_task->ptls, internal_spinlock_time, jl_record_time_for_tls_metric() - t0);
 }
 
 static inline void jl_mutex_lock_nogc(jl_mutex_t *lock) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_ENTER

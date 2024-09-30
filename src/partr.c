@@ -385,7 +385,7 @@ static int may_sleep(jl_ptls_t ptls) JL_NOTSAFEPOINT
 
 extern _Atomic(unsigned) _threadedregion;
 
-JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, jl_value_t *checkempty)
+static jl_task_t *_jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, jl_value_t *checkempty)
 {
     jl_task_t *ct = jl_current_task;
     uint64_t start_cycles = 0;
@@ -536,6 +536,14 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
             jl_process_events();
         }
     }
+}
+
+JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, jl_value_t *checkempty)
+{
+    uint64_t t0 = jl_record_time_for_tls_metric();
+    jl_task_t *task = _jl_task_get_next(trypoptask, q, checkempty);
+    jl_increment_timing_tls_metric(jl_current_task->ptls, scheduler_time, jl_record_time_for_tls_metric() - t0);
+    return task;
 }
 
 #ifdef __cplusplus
