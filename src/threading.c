@@ -49,6 +49,20 @@ JL_DLLEXPORT _Atomic(uint8_t) jl_measure_compile_time_enabled = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_compile_time = 0;
 JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_recompile_time = 0;
 
+JL_DLLEXPORT uint64_t jl_cumulative_scheduler_time_ns(void)
+{
+    int nthreads = jl_atomic_load_acquire(&jl_n_threads);
+    jl_ptls_t *all_tls_states = jl_atomic_load_relaxed(&jl_all_tls_states);
+    uint64_t scheduler_time = 0;
+    for (int i = 0; i < nthreads; i++) {
+        jl_ptls_t ptls = all_tls_states[i];
+        if (ptls == NULL)
+            continue;
+        scheduler_time += ptls->timing_tls.scheduler_time;
+    }
+    return scheduler_time;
+}
+
 JL_DLLEXPORT void *jl_get_ptls_states(void)
 {
     // mostly deprecated: use current_task instead
