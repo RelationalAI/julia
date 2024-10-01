@@ -52,7 +52,12 @@ PaddedSpinLocks are padded so that each is guaranteed to be on its own cache lin
 false sharing.
 """
 mutable struct PaddedSpinLock <: AbstractSpinLock
-    # we make this much larger than necessary to minimize false-sharing
+    # We make this much larger than necessary to minimize false-sharing.
+
+    # Strictly speaking, this is a little bit larger than it needs to be.  For a 64-byte
+    # cache line, this results in the size being 120 bytes.  Because these objects are
+    # 16-byte aligned, it would be enough if `PaddedSpinLock` was 112 bytes (with 48 bytes
+    # in the before padding and 56 bytes in the after padding).
     _padding_before::NTuple{max(0, CACHE_LINE_SIZE - sizeof(Int)), UInt8}
     @atomic owned::Int
     _padding_after::NTuple{max(0, CACHE_LINE_SIZE - sizeof(Int)), UInt8}
