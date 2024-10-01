@@ -867,27 +867,30 @@ _os_ptr_munge(uintptr_t ptr)
 #define _OS_PTR_UNMUNGE(_ptr) _os_ptr_munge((uintptr_t)(_ptr))
 #endif
 
-
-extern bt_context_t *jl_to_bt_context(void *sigctx);
-
-static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
+int jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
 {
-    jl_task_t *ct = jl_current_task;
-    jl_ptls_t ptls = ct->ptls;
-    ptls->bt_size = 0;
+    jl_task_t *ct = NULL;
+    jl_ptls_t ptls = NULL;
+    int16_t tid = INT16_MAX;
+    if (!all_tasks_profile_running()) {
+        ct = jl_current_task;
+        ptls = ct->ptls;
+        ptls->bt_size = 0;
+        tid = ptls->tid;
+    }
     if (t == ct) {
         ptls->bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE, 0);
-        return;
+        return ptls->tid;
     }
     bt_context_t *context = NULL;
     bt_context_t c;
     int16_t old = -1;
-    while (!jl_atomic_cmpswap(&t->tid, &old, ptls->tid) && old != ptls->tid) {
+    while (!jl_atomic_cmpswap(&t->tid, &old, tid) && old != tid) {
         int lockret = jl_lock_stackwalk();
         // if this task is already running somewhere, we need to stop the thread it is running on and query its state
         if (!jl_thread_suspend_and_get_state(old, 0, &c)) {
             jl_unlock_stackwalk(lockret);
-            return;
+            return INT16_MAX; // to indicate a failure to get the backtrace
         }
         jl_unlock_stackwalk(lockret);
         if (jl_atomic_load_relaxed(&t->tid) == old) {
@@ -1109,12 +1112,23 @@ static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
      #pragma message("jl_rec_backtrace not defined for unknown task system")
 #endif
     }
-    if (context)
-        ptls->bt_size = rec_backtrace_ctx(ptls->bt_data, JL_MAX_BT_SIZE, context,  t->gcstack);
+    if (context) {
+        // Record into the profile buffer
+        if (all_tasks_profile_running()) {
+            profile_bt_size_cur += rec_backtrace_ctx((jl_bt_element_t*)profile_bt_data_prof + profile_bt_size_cur,
+                                              profile_bt_size_max - profile_bt_size_cur - 1, context, NULL);
+        }
+        // Record into the buffer owned by the threads's TLS
+        else {
+            ptls->bt_size = rec_backtrace_ctx(ptls->bt_data, JL_MAX_BT_SIZE,
+                                              context, t->gcstack);
+        }
+    }
     if (old == -1)
         jl_atomic_store_relaxed(&t->tid, old);
-    else if (old != ptls->tid)
+    else if (old != tid)
         jl_thread_resume(old);
+    return old;
 }
 
 //--------------------------------------------------
