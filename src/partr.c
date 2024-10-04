@@ -118,6 +118,11 @@ static inline int may_sweep(jl_ptls_t ptls) JL_NOTSAFEPOINT
     return (jl_atomic_load(&ptls->gc_tls.gc_sweeps_requested) > 0);
 }
 
+static inline int may_sweep_stack(jl_ptls_t ptls) JL_NOTSAFEPOINT
+{
+    return (jl_atomic_load(&ptls->gc_tls.gc_stack_sweep_requested) > 0);
+}
+
 // parallel gc thread function
 void jl_parallel_gc_threadfun(void *arg)
 {
@@ -139,12 +144,17 @@ void jl_parallel_gc_threadfun(void *arg)
 
     while (1) {
         uv_mutex_lock(&gc_threads_lock);
-        while (!may_mark() && !may_sweep(ptls)) {
+        while (!may_mark() && !may_sweep(ptls) && !may_sweep_stack(ptls)) {
             uv_cond_wait(&gc_threads_cond, &gc_threads_lock);
         }
         uv_mutex_unlock(&gc_threads_lock);
         assert(jl_atomic_load_relaxed(&ptls->gc_state) == JL_GC_PARALLEL_COLLECTOR_THREAD);
         gc_mark_loop_parallel(ptls, 0);
+        if (may_sweep_stack(ptls)) {
+            assert(jl_atomic_load_relaxed(&ptls->gc_state) == JL_GC_PARALLEL_COLLECTOR_THREAD);
+            sweep_stack_pool_loop();
+            jl_atomic_fetch_add(&ptls->gc_tls.gc_stack_sweep_requested, -1);
+        }
         if (may_sweep(ptls)) {
             assert(jl_atomic_load_relaxed(&ptls->gc_state) == JL_GC_PARALLEL_COLLECTOR_THREAD);
             gc_sweep_pool_parallel(ptls);
