@@ -3,6 +3,7 @@
 using Test
 using Base.Threads
 using Base.Threads: SpinLock, threadpoolsize
+using LinearAlgebra: peakflops
 
 # for cfunction_closure
 include("testenv.jl")
@@ -1312,4 +1313,35 @@ end
         end
     end
 end
+
+@testset "CPU time counter" begin
+    t = Threads.@spawn begin
+        peakflops()
+    end
+    wait(t)
+    @test t.cpu_time_ns > 0
+end
+
+@testset "CPU time counter: lots of spawns" begin
+    using Base.Threads, Dates
+    # create more tasks than we have cores
+    # the CPU time each task gets should be less
+    # than the wall time
+    @sync begin
+        for i in 1:100
+            start_time = now()
+            task = @spawn begin
+                peakflops()
+            end
+            @spawn begin
+                wait(task)
+                end_time = now()
+                wall_time_delta = end_time - start_time
+                cpu_time = Nanosecond(task.cpu_time_ns)
+                @test cpu_time < wall_time_delta
+            end
+        end
+    end
+end
+
 end # main testset
