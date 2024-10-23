@@ -84,6 +84,10 @@ function cumulative_compile_timing(b::Bool)
     return
 end
 
+function cumulative_scheduler_time_ns()
+    return ccall(:jl_cumulative_scheduler_time_ns, UInt64, ())
+end
+
 # total time spend in garbage collection, in nanoseconds
 gc_time_ns() = ccall(:jl_gc_total_hrtime, UInt64, ())
 

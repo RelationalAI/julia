@@ -464,6 +464,28 @@ JL_DLLEXPORT uint64_t jl_hrtime(void) JL_NOTSAFEPOINT
     return uv_hrtime();
 }
 
+JL_DLLEXPORT uint64_t jl_cpu_time(void) JL_NOTSAFEPOINT
+{
+#if defined(_OS_LINUX_)
+    struct rusage usage;
+    if (getrusage(RUSAGE_THREAD, &usage) == 0) {
+        return (uint64_t)usage.ru_utime.tv_sec * 1000000000 + (uint64_t)usage.ru_utime.tv_usec * 1000;
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+JL_DLLEXPORT uint64_t jl_record_time_for_tls_metric(void) JL_NOTSAFEPOINT
+{
+#ifdef USE_CPU_TIMING_FOR_TLS_METRIC
+    return jl_cpu_time();
+#else
+    return jl_hrtime();
+#endif
+}
+
 // -- iterating the environment --
 
 #ifdef __APPLE__
