@@ -1715,9 +1715,20 @@ static void invalidate_backedges(void (*f)(jl_code_instance_t*), jl_method_insta
     }
 }
 
+// AA
+_Atomic(uint32_t) jl_is_method_instance_add_backedge_enabled = 1;
+JL_DLLEXPORT void jl_disable_method_instance_add_backedge(void)
+{
+    jl_atomic_store_release(&jl_is_method_instance_add_backedge_enabled, 0);
+}
+
+// invokesig then the caller come in the array
 // add a backedge from callee to caller
 JL_DLLEXPORT void jl_method_instance_add_backedge(jl_method_instance_t *callee, jl_value_t *invokesig, jl_method_instance_t *caller)
 {
+    if (jl_atomic_load_acquire(&jl_is_method_instance_add_backedge_enabled) == 0) {
+        return;
+    }
     JL_LOCK(&callee->def.method->writelock);
     if (invokesig == jl_nothing)
         invokesig = NULL;      // julia uses `nothing` but C uses NULL (#undef)

@@ -321,6 +321,7 @@
     XX(jl_method_table_disable) \
     XX(jl_method_table_for) \
     XX(jl_method_table_insert) \
+    XX(jl_disable_method_instance_add_backedge) \
     XX(jl_methtable_lookup) \
     XX(jl_mi_cache_insert) \
     XX(jl_module_build_id) \
