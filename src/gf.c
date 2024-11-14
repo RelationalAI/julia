@@ -1756,6 +1756,8 @@ JL_DLLEXPORT void jl_method_instance_add_backedge(jl_method_instance_t *callee, 
 // add a backedge from a non-existent signature to caller
 JL_DLLEXPORT void jl_method_table_add_backedge(jl_methtable_t *mt, jl_value_t *typ, jl_value_t *caller)
 {
+    if (!jl_atomic_load_acquire(&allow_new_worlds))
+        return;
     JL_LOCK(&mt->writelock);
     if (!mt->backedges) {
         // lazy-init the backedges array
