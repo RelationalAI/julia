@@ -3160,12 +3160,9 @@ end
         end
 
         if pkgimage
-            # TODO: hackaronud to disable CRC checks for our cache packages
-            if !occursin(r"Cache20", ocachefile)
-                if !isvalid_pkgimage_crc(io, ocachefile::String)
-                    @debug "Rejecting cache file $cachefile because $ocachefile has an invalid checksum"
-                    return true
-                end
+            if !isvalid_pkgimage_crc(io, ocachefile::String)
+                @debug "Rejecting cache file $cachefile because $ocachefile has an invalid checksum"
+                return true
             end
         end
 
