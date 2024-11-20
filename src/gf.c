@@ -8,6 +8,7 @@
   . static parameter inference
   . method specialization and caching, invoking type inference
 */
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include "julia.h"
@@ -24,7 +25,7 @@
 extern "C" {
 #endif
 
-static _Atomic(size_t) allow_new_worlds = 1;
+static _Atomic(bool) allow_new_worlds = 1;
 JL_DLLEXPORT _Atomic(size_t) jl_world_counter = 1; // uses atomic acquire/release
 JL_DLLEXPORT size_t jl_get_world_counter(void) JL_NOTSAFEPOINT
 {
