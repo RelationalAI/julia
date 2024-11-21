@@ -25,7 +25,7 @@
 extern "C" {
 #endif
 
-static _Atomic(bool) allow_new_worlds = 1;
+static _Atomic(bool) allow_new_worlds = true;
 JL_DLLEXPORT _Atomic(size_t) jl_world_counter = 1; // uses atomic acquire/release
 JL_DLLEXPORT size_t jl_get_world_counter(void) JL_NOTSAFEPOINT
 {
@@ -1954,7 +1954,7 @@ JL_DLLEXPORT void jl_disable_new_worlds(void)
 {
     if (jl_generating_output())
         jl_error("Disabling Method changes is not possible when generating output.");
-    jl_atomic_store_release(&allow_new_worlds, 0);
+    jl_atomic_store_release(&allow_new_worlds, false);
     jl_foreach_reachable_mtable(erase_all_backedges, (void*)NULL);
 }
 
