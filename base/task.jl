@@ -4,6 +4,16 @@
 
 Core.Task(@nospecialize(f), reserved_stack::Int=0) = Core._Task(f, reserved_stack, ThreadSynchronizer())
 
+# Task metrics
+mutable struct TaskMetrics
+    @atomic first_enqueued_at::UInt64
+    @atomic last_started_running_at::UInt64
+    @atomic cpu_time_ns::UInt64
+    @atomic finished_at::UInt64
+    TaskMetrics() = new(0, 0, 0, 0)
+end
+create_task_metrics() = TaskMetrics()
+
 # Container for a captured exception and its backtrace. Can be serialized.
 struct CapturedException <: Exception
     ex::Any
@@ -809,6 +819,13 @@ end
 
 # runtime system hook called when a task finishes
 function task_done_hook(t::Task)
+    # [task] user_time -finished-> wait_time
+    if t.metrics_enabled
+        now = time_ns()
+        @atomic :monotonic t.metrics.finished_at = now
+        @atomic :monotonic t.metrics.cpu_time_ns = now - t.metrics.last_started_running_at
+    end
+
     # `finish_task` sets `sigatomic` before entering this function
     err = istaskfailed(t)
     result = task_result(t)
@@ -1209,7 +1226,7 @@ end
 # update the `cpu_time_ns` field of `t` to include the time since it last started running.
 function record_cpu_time!(t::Task)
     if t.metrics_enabled && !istaskdone(t)
-        @atomic :monotonic t.cpu_time_ns += time_ns() - t.last_started_running_at
+        @atomic :monotonic t.metrics.cpu_time_ns += time_ns() - t.metrics.last_started_running_at
     end
     return t
 end
@@ -1218,8 +1235,10 @@ end
 # (or the first time it has been unfairly yielded to without being added to the run queue)
 # then set the `first_enqueued_at` field to the current time.
 function maybe_record_enqueued!(t::Task)
-    if t.metrics_enabled && t.first_enqueued_at == 0
-        @atomic :monotonic t.first_enqueued_at = time_ns()
+    if t.metrics_enabled && t.metrics.first_enqueued_at == 0
+        @atomic :monotonic t.metrics.first_enqueued_at = time_ns()
     end
     return t
 end
+
+function record_task_created!(t::Task

@@ -548,9 +548,9 @@ function task_cpu_time_ns(t::Task=current_task())
     if t == current_task()
         # These metrics fields can't update while we're running.
         # But since we're running we need to include the time since we last started running!
-        return t.cpu_time_ns + (time_ns() - t.last_started_running_at)
+        return t.metrics.cpu_time_ns + (time_ns() - t.metrics.last_started_running_at)
     else
-        return t.cpu_time_ns
+        return t.metrics.cpu_time_ns
     end
 end
 
@@ -570,9 +570,9 @@ See [`Base.Experimental.task_metrics`](@ref).
 """
 function task_wall_time_ns(t::Task=current_task())
     t.metrics_enabled || return nothing
-    start_at = t.first_enqueued_at
+    start_at = t.metrics.first_enqueued_at
     start_at == 0 && return UInt64(0)
-    end_at = t.finished_at
+    end_at = t.metrics.finished_at
     end_at == 0 && return time_ns() - start_at
     return end_at - start_at
 end

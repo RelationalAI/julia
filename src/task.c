@@ -1099,6 +1099,31 @@ void jl_rng_split(uint64_t dst[JL_RNG_SIZE], uint64_t src[JL_RNG_SIZE]) JL_NOTSA
     }
 }
 
+static _Atomic(jl_function_t*) create_task_metrics_func JL_GLOBALLY_ROOTED = NULL;
+static jl_value_t *create_task_metrics(void)
+{
+    jl_task_t *ct = jl_current_task;
+    jl_value_t *tm = NULL;
+    jl_function_t *ctm_func = jl_atomic_load_relaxed(&create_task_metrics_func);
+    if (ctm_func == NULL) {
+        ctm_func = (jl_function_t*)jl_get_global(jl_base_module, jl_symbol("create_task_metrics"));
+        if (ctm_func != NULL) {
+            jl_atomic_store_release(&create_task_metrics_func, ctm);
+        }
+    }
+    if (ctm != NULL) {
+        JL_TRY {
+            tm = jl_apply(&ctm, 1);
+            return tm;
+        }
+        JL_CATCH {
+            jl_no_exc_handler(jl_current_exception(ct), ct);
+        }
+    }
+    jl_gc_debug_critical_error();
+    abort();
+}
+
 JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion_future, size_t ssize)
 {
     jl_task_t *ct = jl_current_task;
@@ -1154,10 +1179,7 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
     t->world_age = ct->world_age;
     t->reentrant_timing = 0;
     t->metrics_enabled = jl_atomic_load_relaxed(&jl_task_metrics_enabled) != 0;
-    jl_atomic_store_relaxed(&t->first_enqueued_at, 0);
-    jl_atomic_store_relaxed(&t->last_started_running_at, 0);
-    jl_atomic_store_relaxed(&t->cpu_time_ns, 0);
-    jl_atomic_store_relaxed(&t->finished_at, 0);
+    t->metrics = t->metrics_enabled ? create_task_metrics() : jl_nothing;
     jl_timing_task_init(t);
 
     if (t->ctx.copy_stack)
@@ -1617,6 +1639,7 @@ jl_task_t *jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi)
     jl_atomic_store_relaxed(&ct->cpu_time_ns, 0);
     jl_atomic_store_relaxed(&ct->finished_at, 0);
     ct->metrics_enabled = jl_atomic_load_relaxed(&jl_task_metrics_enabled) != 0;
+    ct->metrics = ct->metrics_enabled ? create_task_metrics() : jl_nothing;
     if (ct->metrics_enabled) {
         // [task] created -started-> user_time
         uint64_t now = jl_hrtime();
