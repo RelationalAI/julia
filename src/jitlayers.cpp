@@ -708,6 +708,14 @@ void JuliaOJIT::OptSelLayerT::emit(std::unique_ptr<orc::MaterializationResponsib
                         if (ol < optlevel)
                             optlevel = ol;
                     }
+                    attr = F.getFnAttribute("julia-min-optimization-level");
+                    val = attr.getValueAsString();
+                    if (val != "") {
+                        size_t ol = (size_t)val[0] - '0';
+                        if (ol > opt_level)
+                            opt_level = ol;
+                        jl_safe_printf("Function %s opt: %d\n", F.getName().str().c_str(), (int)opt_level);
+                    }
                 }
             }
             optlevel = std::min(std::max(optlevel, optlevel_min), this->count);

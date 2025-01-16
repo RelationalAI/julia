@@ -1668,6 +1668,7 @@ extern JL_DLLEXPORT jl_sym_t *jl_escape_sym;
 extern JL_DLLEXPORT jl_sym_t *jl_aliasscope_sym;
 extern JL_DLLEXPORT jl_sym_t *jl_popaliasscope_sym;
 extern JL_DLLEXPORT jl_sym_t *jl_optlevel_sym;
+extern JL_DLLEXPORT jl_sym_t *jl_min_optlevel_sym;
 extern JL_DLLEXPORT jl_sym_t *jl_thismodule_sym;
 extern JL_DLLEXPORT jl_sym_t *jl_atom_sym;
 extern JL_DLLEXPORT jl_sym_t *jl_statement_sym;

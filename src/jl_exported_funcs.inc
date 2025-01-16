@@ -227,6 +227,7 @@
     XX(jl_get_module_infer) \
     XX(jl_get_module_of_binding) \
     XX(jl_get_module_optlevel) \
+    XX(jl_get_module_min_optlevel) \
     XX(jl_get_next_task) \
     XX(jl_get_nth_field) \
     XX(jl_get_nth_field_checked) \
@@ -420,6 +421,7 @@
     XX(jl_set_module_infer) \
     XX(jl_set_module_nospecialize) \
     XX(jl_set_module_optlevel) \
+    XX(jl_set_module_min_optlevel) \
     XX(jl_set_module_uuid) \
     XX(jl_set_next_task) \
     XX(jl_set_nth_field) \
