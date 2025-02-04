@@ -4,7 +4,7 @@
 // Note that this file is `#include`d by "signal-handling.c"
 #include <mmsystem.h> // hidden by LEAN_AND_MEAN
 
-static const size_t sig_stack_size = 131072; // 128k reserved for backtrace_fiber for stack overflow handling
+const size_t sig_stack_size = 131072; // 128k reserved for backtrace_fiber for stack overflow handling
 
 // Copied from MINGW_FLOAT_H which may not be found due to a collision with the builtin gcc float.h
 // eventually we can probably integrate this into OpenLibm.
@@ -333,7 +333,7 @@ LONG WINAPI jl_exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo)
         jl_safe_printf("UNKNOWN"); break;
     }
     jl_safe_printf(" at 0x%zx -- ", (size_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
-    jl_print_native_codeloc((uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
+    jl_print_native_codeloc("", (uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
 
     jl_critical_error(0, 0, ExceptionInfo->ContextRecord, ct);
     static int recursion = 0;

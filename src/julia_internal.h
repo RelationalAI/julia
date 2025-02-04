@@ -224,6 +224,7 @@ extern volatile size_t profile_bt_size_max;
 extern volatile size_t profile_bt_size_cur;
 extern volatile int profile_running;
 extern volatile int profile_all_tasks;
+extern int heartbeat_tid; // Mostly used to ensure we skip this thread in the CPU profiler. XXX: not implemented on Windows
 // Ensures that we can safely read the `live_tasks`field of every TLS when profiling.
 // We want to avoid the case that a GC gets interleaved with `jl_profile_task` and shrinks
 // the `live_tasks` array while we are reading it or frees tasks that are being profiled.
@@ -239,6 +240,7 @@ extern uv_mutex_t bt_data_prof_lock;
 #define PROFILE_STATE_THREAD_NOT_SLEEPING (1)
 #define PROFILE_STATE_THREAD_SLEEPING (2)
 #define PROFILE_STATE_WALL_TIME_PROFILING (3)
+extern _Atomic(int) n_threads_running;
 void jl_profile_task(void);
 
 // number of cycles since power-on
@@ -753,6 +755,32 @@ JL_CALLABLE(jl_f_opaque_closure_call);
 void jl_install_default_signal_handlers(void);
 void restore_signals(void);
 void jl_install_thread_signal_handler(jl_ptls_t ptls);
+extern const size_t sig_stack_size;
+STATIC_INLINE int is_addr_on_sigstack(jl_ptls_t ptls, void *ptr)
+{
+    // One guard page for signal_stack.
+    return !((char*)ptr < (char*)ptls->signal_stack - jl_page_size ||
+             (char*)ptr > (char*)ptls->signal_stack + sig_stack_size);
+}
+STATIC_INLINE int jl_inside_signal_handler(void)
+{
+#if (defined(_OS_LINUX_) && defined(_CPU_X86_64_)) || (defined(_OS_DARWIN_) && defined(_CPU_AARCH64_))
+    // Read the stack pointer
+    size_t sp;
+#if defined(_OS_LINUX_) && defined(_CPU_X86_64_)
+    __asm__ __volatile__("movq %%rsp, %0" : "=r"(sp));
+#elif defined(_OS_DARWIN_) && defined(_CPU_AARCH64_)
+    __asm__ __volatile__("mov %0, sp" : "=r"(sp));
+#endif
+    // Check if the stack pointer is within the signal stack
+    jl_ptls_t ptls = jl_current_task->ptls;
+    return is_addr_on_sigstack(ptls, (void*)sp);
+#else
+    return 0;
+#endif
+}
+// File-descriptor for safe logging on signal handling
+extern int jl_sig_fd;
 
 JL_DLLEXPORT jl_fptr_args_t jl_get_builtin_fptr(jl_datatype_t *dt);
 
@@ -1425,8 +1453,8 @@ JL_DLLEXPORT jl_value_t *jl_get_backtrace(void);
 void jl_critical_error(int sig, int si_code, bt_context_t *context, jl_task_t *ct);
 JL_DLLEXPORT void jl_raise_debugger(void) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_gdblookup(void* ip) JL_NOTSAFEPOINT;
-void jl_print_native_codeloc(uintptr_t ip) JL_NOTSAFEPOINT;
-void jl_print_bt_entry_codeloc(jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
+void jl_print_native_codeloc(char *pre_str, uintptr_t ip) JL_NOTSAFEPOINT;
+void jl_print_bt_entry_codeloc(int sig, jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
 #ifdef _OS_WINDOWS_
 JL_DLLEXPORT void jl_refresh_dbg_module_list(void);
 #endif

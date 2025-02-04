@@ -838,6 +838,15 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
     if (jl_options.handle_signals == JL_OPTIONS_HANDLE_SIGNALS_ON)
         jl_install_default_signal_handlers();
 
+#if (defined(_OS_LINUX_) && defined(_CPU_X86_64_)) || (defined(_OS_DARWIN_) && defined(_CPU_AARCH64_))
+    if (jl_options.safe_crash_log_file != NULL) {
+        jl_sig_fd = open(jl_options.safe_crash_log_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (jl_sig_fd == -1) {
+            jl_error("fatal error: could not open safe crash log file for writing");
+        }
+    }
+#endif
+
     jl_gc_init();
 
     arraylist_new(&jl_linkage_blobs, 0);
@@ -863,6 +872,8 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
     JL_GC_PROMISE_ROOTED(ct);
     _finish_julia_init(rel, ptls, ct);
 }
+
+void jl_init_heartbeat(void);
 
 static NOINLINE void _finish_julia_init(JL_IMAGE_SEARCH rel, jl_ptls_t ptls, jl_task_t *ct)
 {
@@ -916,6 +927,11 @@ static NOINLINE void _finish_julia_init(JL_IMAGE_SEARCH rel, jl_ptls_t ptls, jl_
     jl_start_threads();
     jl_start_gc_threads();
     uv_barrier_wait(&thread_init_done);
+
+    if (jl_base_module != NULL) {
+        // requires code in Base
+        jl_init_heartbeat();
+    }
 
     jl_gc_enable(1);
 
