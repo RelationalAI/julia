@@ -697,16 +697,14 @@ static void jl_queue_module_for_serialization(jl_serializer_state *s, jl_module_
     jl_queue_for_serialization(s, m->parent);
     jl_queue_for_serialization(s, m->bindings);
     jl_queue_for_serialization(s, m->bindingkeyset);
-    if (jl_options.strip_metadata) {
-        jl_svec_t *table = jl_atomic_load_relaxed(&m->bindings);
-        for (size_t i = 0; i < jl_svec_len(table); i++) {
-            jl_binding_t *b = (jl_binding_t*)jl_svec_ref(table, i);
-            if ((void*)b == jl_nothing)
-                break;
-            jl_sym_t *name = b->globalref->name;
-            if (name == jl_docmeta_sym && jl_atomic_load_relaxed(&b->value))
-                record_field_change((jl_value_t**)&b->value, jl_nothing);
-        }
+    jl_svec_t *table = jl_atomic_load_relaxed(&m->bindings);
+    for (size_t i = 0; i < jl_svec_len(table); i++) {
+        jl_binding_t *b = (jl_binding_t*)jl_svec_ref(table, i);
+        if ((void*)b == jl_nothing)
+            break;
+        jl_sym_t *name = b->globalref->name;
+        if (name == jl_docmeta_sym && jl_atomic_load_relaxed(&b->value))
+            record_field_change((jl_value_t**)&b->value, jl_nothing);
     }
 
     for (size_t i = 0; i < m->usings.len; i++) {
