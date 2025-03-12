@@ -50,7 +50,12 @@ function list_append!!(q::IntrusiveLinkedList{T}, q2::IntrusiveLinkedList{T}) wh
 end
 
 function push!(q::IntrusiveLinkedList{T}, val::T) where T
-    val.queue === nothing || error("val already in a list")
+    #val.queue === nothing || error("val already in a list")
+    if val.queue !== nothing
+        Base.show_backtrace(stderr, stacktrace(true))
+        println(stderr)
+        error("val already in a list")
+    end
     val.queue = q
     tail = q.tail
     if tail === nothing
@@ -63,7 +68,12 @@ function push!(q::IntrusiveLinkedList{T}, val::T) where T
 end
 
 function pushfirst!(q::IntrusiveLinkedList{T}, val::T) where T
-    val.queue === nothing || error("val already in a list")
+    #val.queue === nothing || error("val already in a list")
+    if val.queue !== nothing
+        Base.show_backtrace(stderr, stacktrace(true))
+        println(stderr)
+        error("val already in a list")
+    end
     val.queue = q
     head = q.head
     if head === nothing
