@@ -8,6 +8,7 @@
   . static parameter inference
   . method specialization and caching, invoking type inference
 */
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include "julia.h"
@@ -24,6 +25,7 @@
 extern "C" {
 #endif
 
+static _Atomic(bool) allow_new_worlds = true;
 JL_DLLEXPORT _Atomic(size_t) jl_world_counter = 1; // uses atomic acquire/release
 JL_DLLEXPORT size_t jl_get_world_counter(void) JL_NOTSAFEPOINT
 {
@@ -112,7 +114,7 @@ static int8_t jl_cachearg_offset(jl_methtable_t *mt)
 
 static uint_t speccache_hash(size_t idx, jl_svec_t *data)
 {
-    jl_method_instance_t *ml = (jl_method_instance_t*)jl_svecref(data, idx);
+    jl_method_instance_t *ml = (jl_method_instance_t*)jl_svecref(data, idx); // This must always happen inside the lock
     jl_value_t *sig = ml->specTypes;
     if (jl_is_unionall(sig))
         sig = jl_unwrap_unionall(sig);
@@ -121,6 +123,8 @@ static uint_t speccache_hash(size_t idx, jl_svec_t *data)
 
 static int speccache_eq(size_t idx, const void *ty, jl_svec_t *data, uint_t hv)
 {
+    if (idx >= jl_svec_len(data))
+        return 0; // We got a OOB access, probably due to a data race
     jl_method_instance_t *ml = (jl_method_instance_t*)jl_svecref(data, idx);
     jl_value_t *sig = ml->specTypes;
     if (ty == sig)
@@ -1533,14 +1537,6 @@ void print_func_loc(JL_STREAM *s, jl_method_t *m)
     }
 }
 
-static int is_anonfn_typename(char *name)
-{
-    if (name[0] != '#' || name[1] == '#')
-        return 0;
-    char *other = strrchr(name, '#');
-    return other > &name[1] && other[1] > '0' && other[1] <= '9';
-}
-
 static void method_overwrite(jl_typemap_entry_t *newentry, jl_method_t *oldvalue)
 {
     // method overwritten
@@ -1716,6 +1712,8 @@ static void invalidate_backedges(void (*f)(jl_code_instance_t*), jl_method_insta
 // add a backedge from callee to caller
 JL_DLLEXPORT void jl_method_instance_add_backedge(jl_method_instance_t *callee, jl_value_t *invokesig, jl_method_instance_t *caller)
 {
+    if (!jl_atomic_load_acquire(&allow_new_worlds))
+        return;
     JL_LOCK(&callee->def.method->writelock);
     if (invokesig == jl_nothing)
         invokesig = NULL;      // julia uses `nothing` but C uses NULL (#undef)
@@ -1751,6 +1749,8 @@ JL_DLLEXPORT void jl_method_instance_add_backedge(jl_method_instance_t *callee, 
 // add a backedge from a non-existent signature to caller
 JL_DLLEXPORT void jl_method_table_add_backedge(jl_methtable_t *mt, jl_value_t *typ, jl_value_t *caller)
 {
+    if (!jl_atomic_load_acquire(&allow_new_worlds))
+        return;
     JL_LOCK(&mt->writelock);
     if (!mt->backedges) {
         // lazy-init the backedges array
@@ -1913,8 +1913,48 @@ static void jl_method_table_invalidate(jl_methtable_t *mt, jl_typemap_entry_t *m
     }
 }
 
+static int erase_method_backedges(jl_typemap_entry_t *def, void *closure)
+{
+    jl_method_t *method = def->func.method;
+    jl_value_t *specializations = jl_atomic_load_relaxed(&method->specializations);
+    if (jl_is_svec(specializations)) {
+        size_t i, l = jl_svec_len(specializations);
+        for (i = 0; i < l; i++) {
+            jl_method_instance_t *mi = (jl_method_instance_t*)jl_svecref(specializations, i);
+            if ((jl_value_t*)mi != jl_nothing) {
+                mi->backedges = NULL;
+            }
+        }
+    }
+    else {
+        jl_method_instance_t *mi = (jl_method_instance_t*)specializations;
+        mi->backedges = NULL;
+    }
+    return 1;
+}
+
+static int erase_all_backedges(jl_methtable_t *mt, void *env)
+{
+    // removes all method caches
+    // this might not be entirely safe (GC or MT), thus we only do it very early in bootstrapping
+    mt->backedges = NULL;
+    jl_typemap_visitor(jl_atomic_load_relaxed(&mt->defs), erase_method_backedges, env);
+    return 1;
+}
+
+JL_DLLEXPORT void jl_disable_new_worlds(void)
+{
+    if (jl_generating_output())
+        jl_error("Disabling Method changes is not possible when generating output.");
+    jl_atomic_store_release(&allow_new_worlds, false);
+    jl_foreach_reachable_mtable(erase_all_backedges, (void*)NULL);
+}
+
+
 JL_DLLEXPORT void jl_method_table_disable(jl_methtable_t *mt, jl_method_t *method)
 {
+    if (!jl_atomic_load_acquire(&allow_new_worlds))
+        jl_error("Method changes have been disabled via a call to jl_disable_new_worlds.");
     jl_typemap_entry_t *methodentry = do_typemap_search(mt, method);
     JL_LOCK(&mt->writelock);
     // Narrow the world age on the method to make it uncallable
@@ -1984,6 +2024,8 @@ static int is_replacing(char ambig, jl_value_t *type, jl_method_t *m, jl_method_
 
 JL_DLLEXPORT void jl_method_table_insert(jl_methtable_t *mt, jl_method_t *method, jl_tupletype_t *simpletype)
 {
+    if (!jl_atomic_load_acquire(&allow_new_worlds))
+        jl_error("Method changes have been disabled via a call to jl_disable_new_worlds.");
     JL_TIMING(ADD_METHOD, ADD_METHOD);
     assert(jl_is_method(method));
     assert(jl_is_mtable(mt));
@@ -2331,7 +2373,7 @@ jl_code_instance_t *jl_method_compiled(jl_method_instance_t *mi, size_t world)
 
 jl_mutex_t precomp_statement_out_lock;
 
-static void record_precompile_statement(jl_method_instance_t *mi)
+static void record_precompile_statement(jl_method_instance_t *mi, double compilation_time)
 {
     static ios_t f_precompile;
     static JL_STREAM* s_precompile = NULL;
@@ -2354,6 +2396,8 @@ static void record_precompile_statement(jl_method_instance_t *mi)
         }
     }
     if (!jl_has_free_typevars(mi->specTypes)) {
+        if (jl_options.trace_compile_timing)
+            jl_printf(s_precompile, "#= %6.1f =# ", compilation_time / 1e6);
         jl_printf(s_precompile, "precompile(");
         jl_static_show(s_precompile, mi->specTypes);
         jl_printf(s_precompile, ")\n");
@@ -2361,6 +2405,38 @@ static void record_precompile_statement(jl_method_instance_t *mi)
             ios_flush(&f_precompile);
     }
     JL_UNLOCK(&precomp_statement_out_lock);
+}
+
+jl_mutex_t dispatch_statement_out_lock;
+
+static void record_dispatch_statement(jl_method_instance_t *mi)
+{
+    static ios_t f_dispatch;
+    static JL_STREAM* s_dispatch = NULL;
+    jl_method_t *def = mi->def.method;
+    if (!jl_is_method(def))
+        return;
+
+    JL_LOCK(&dispatch_statement_out_lock);
+    if (s_dispatch == NULL) {
+        const char *t = jl_options.trace_dispatch;
+        if (!strncmp(t, "stderr", 6)) {
+            s_dispatch = JL_STDERR;
+        }
+        else {
+            if (ios_file(&f_dispatch, t, 1, 1, 1, 1) == NULL)
+                jl_errorf("cannot open dispatch statement file \"%s\" for writing", t);
+            s_dispatch = (JL_STREAM*) &f_dispatch;
+        }
+    }
+    if (!jl_has_free_typevars(mi->specTypes)) {
+        jl_printf(s_dispatch, "precompile(");
+        jl_static_show(s_dispatch, mi->specTypes);
+        jl_printf(s_dispatch, ")\n");
+        if (s_dispatch != JL_STDERR)
+            ios_flush(&f_dispatch);
+    }
+    JL_UNLOCK(&dispatch_statement_out_lock);
 }
 
 jl_method_instance_t *jl_normalize_to_compilable_mi(jl_method_instance_t *mi JL_PROPAGATES_ROOT);
@@ -2450,7 +2526,7 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
                     codeinst->rettype_const = unspec->rettype_const;
                     jl_atomic_store_release(&codeinst->invoke, unspec_invoke);
                     jl_mi_cache_insert(mi, codeinst);
-                    record_precompile_statement(mi);
+                    record_precompile_statement(mi, 0);
                     return codeinst;
                 }
             }
@@ -2467,7 +2543,7 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
                 0, 1, ~(size_t)0, 0, 0, jl_nothing, 0);
             jl_atomic_store_release(&codeinst->invoke, jl_fptr_interpret_call);
             jl_mi_cache_insert(mi, codeinst);
-            record_precompile_statement(mi);
+            record_precompile_statement(mi, 0);
             return codeinst;
         }
         if (compile_option == JL_OPTIONS_COMPILE_OFF) {
@@ -2477,7 +2553,11 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
         }
     }
 
-    codeinst = jl_generate_fptr(mi, world);
+    double compile_time = jl_hrtime();
+    int did_compile = 0;
+    codeinst = jl_generate_fptr(mi, world, &did_compile);
+    compile_time = jl_hrtime() - compile_time;
+
     if (!codeinst) {
         jl_method_instance_t *unspec = jl_get_unspecialized_from_mi(mi);
         jl_code_instance_t *ucache = jl_get_method_inferred(unspec, (jl_value_t*)jl_any_type, 1, ~(size_t)0);
@@ -2517,8 +2597,8 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
         jl_atomic_store_release(&codeinst->invoke, ucache_invoke);
         jl_mi_cache_insert(mi, codeinst);
     }
-    else {
-        record_precompile_statement(mi);
+    else if (did_compile) {
+        record_precompile_statement(mi, compile_time);
     }
     jl_atomic_store_relaxed(&codeinst->precompile, 1);
     return codeinst;
@@ -2776,7 +2856,8 @@ static void jl_compile_now(jl_method_instance_t *mi)
 JL_DLLEXPORT void jl_compile_method_instance(jl_method_instance_t *mi, jl_tupletype_t *types, size_t world)
 {
     size_t tworld = jl_typeinf_world;
-    jl_atomic_store_relaxed(&mi->precompiled, 1);
+    uint8_t miflags = jl_atomic_load_relaxed(&mi->flags) | JL_MI_FLAGS_MASK_PRECOMPILED;
+    jl_atomic_store_relaxed(&mi->flags, miflags);
     if (jl_generating_output()) {
         jl_compile_now(mi);
         // In addition to full compilation of the compilation-signature, if `types` is more specific (e.g. due to nospecialize),
@@ -2791,7 +2872,8 @@ JL_DLLEXPORT void jl_compile_method_instance(jl_method_instance_t *mi, jl_tuplet
             types2 = jl_type_intersection_env((jl_value_t*)types, (jl_value_t*)mi->def.method->sig, &tpenv2);
             jl_method_instance_t *mi2 = jl_specializations_get_linfo(mi->def.method, (jl_value_t*)types2, tpenv2);
             JL_GC_POP();
-            jl_atomic_store_relaxed(&mi2->precompiled, 1);
+            miflags = jl_atomic_load_relaxed(&mi2->flags) | JL_MI_FLAGS_MASK_PRECOMPILED;
+            jl_atomic_store_relaxed(&mi2->flags, miflags);
             if (jl_rettype_inferred(mi2, world, world) == jl_nothing)
                 (void)jl_type_infer(mi2, world, 1);
             if (jl_typeinf_func && mi->def.method->primary_world <= tworld) {
@@ -3057,6 +3139,16 @@ have_entry:
             jl_method_error(F, args, nargs, world);
             // unreachable
         }
+        // mfunc is about to be dispatched
+        if (jl_options.trace_dispatch != NULL) {
+            uint8_t miflags = jl_atomic_load_relaxed(&mfunc->flags);
+            uint8_t was_dispatched = miflags & JL_MI_FLAGS_MASK_DISPATCHED;
+            if (!was_dispatched) {
+                miflags |= JL_MI_FLAGS_MASK_DISPATCHED;
+                jl_atomic_store_relaxed(&mfunc->flags, miflags);
+                record_dispatch_statement(mfunc);
+            }
+        }
     }
 
 #ifdef JL_TRACE
@@ -3179,6 +3271,15 @@ jl_value_t *jl_gf_invoke_by_method(jl_method_t *method, jl_value_t *gf, jl_value
             jl_gc_sync_total_bytes(last_alloc); // discard allocation count from compilation
     }
     JL_GC_PROMISE_ROOTED(mfunc);
+    if (jl_options.trace_dispatch != NULL) {
+        uint8_t miflags = jl_atomic_load_relaxed(&mfunc->flags);
+        uint8_t was_dispatched = miflags & JL_MI_FLAGS_MASK_DISPATCHED;
+        if (!was_dispatched) {
+            miflags |= JL_MI_FLAGS_MASK_DISPATCHED;
+            jl_atomic_store_relaxed(&mfunc->flags, miflags);
+            record_dispatch_statement(mfunc);
+        }
+    }
     size_t world = jl_current_task->world_age;
     return _jl_invoke(gf, args, nargs - 1, mfunc, world);
 }

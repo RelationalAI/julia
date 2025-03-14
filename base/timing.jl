@@ -23,12 +23,15 @@ struct GC_Num
     sweep_time      ::Int64
     mark_time       ::Int64
     total_sweep_time  ::Int64
+    total_sweep_page_walk_time              ::Int64
+    total_sweep_madvise_time                ::Int64
+    total_sweep_free_mallocd_memory_time    ::Int64
     total_mark_time   ::Int64
     last_full_sweep ::Int64
+    last_incremental_sweep ::Int64
 end
 
 gc_num() = ccall(:jl_gc_num, GC_Num, ())
-reset_gc_stats() = ccall(:jl_gc_reset_stats, Cvoid, ())
 
 # This type is to represent differences in the counters, so fields may be negative
 struct GC_Diff
@@ -95,6 +98,46 @@ since then.
 function gc_live_bytes()
     num = gc_num()
     Int(ccall(:jl_gc_live_bytes, Int64, ())) + num.allocd + num.deferred_alloc
+end
+
+# must be kept in sync with the value from `src/julia_threads.h``
+const JL_GC_N_MAX_POOLS = 51
+function gc_page_utilization_data()
+    page_utilization_raw = cglobal(:jl_gc_page_utilization_stats, Float64)
+    return Base.unsafe_wrap(Array, page_utilization_raw, JL_GC_N_MAX_POOLS, own=false)
+end
+
+# must be kept in sync with `src/gc.h``
+const FULL_SWEEP_REASONS = [:FULL_SWEEP_REASON_SWEEP_ALWAYS_FULL, :FULL_SWEEP_REASON_FORCED_FULL_SWEEP,
+                            :FULL_SWEEP_REASON_ALLOCATION_INTERVAL_ABOVE_MAXMEM, :FULL_SWEEP_REASON_LIVE_BYTES_ABOVE_MAX_TOTAL_MEMORY,
+                            :FULL_SWEEP_REASON_LARGE_INTERGEN_FRONTIER]
+
+"""
+    Base.full_sweep_reasons()
+
+Return a dictionary of the number of times each full sweep reason has occurred.
+
+The reasons are:
+- `:FULL_SWEEP_REASON_SWEEP_ALWAYS_FULL`: Full sweep was caused due to `always_full` being set in the GC debug environment
+- `:FULL_SWEEP_REASON_FORCED_FULL_SWEEP`: Full sweep was forced by `GC.gc(true)`
+- `:FULL_SWEEP_REASON_ALLOCATION_INTERVAL_ABOVE_MAXMEM`: Full sweep was forced by the allocation interval being above the total
+    memory in the machine (as returned by LibUV) divided by the number of mutator threads
+- `:FULL_SWEEP_REASON_LIVE_BYTES_ABOVE_MAX_TOTAL_MEMORY`: Full sweep was caused due to live bytes being above the
+    soft heap limit size (which is either automatically computed at initialization based on the total memory provided by LibUV,
+    or set by the user via `--heap-size-hint`)
+- `:FULL_SWEEP_REASON_LARGE_INTERGEN_FRONTIER`: Full sweep was forced by the intergenerational frontier being too large
+    (i.e. too many pointers in the remembered set)
+
+Note that the set of reasons is not guaranteed to be stable across minor versions of Julia.
+"""
+function full_sweep_reasons()
+    reason = cglobal(:jl_full_sweep_reasons, UInt64)
+    reasons_as_array = Base.unsafe_wrap(Vector{UInt64}, reason, length(FULL_SWEEP_REASONS), own=false)
+    d = Dict{Symbol, Int64}()
+    for (i, r) in enumerate(FULL_SWEEP_REASONS)
+        d[r] = reasons_as_array[i]
+    end
+    return d
 end
 
 """

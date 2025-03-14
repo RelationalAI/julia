@@ -25,18 +25,63 @@ end
     end
 end
 
-busywait(0, 0) # compile
-@profile busywait(1, 20)
+@noinline function sleeping_tasks(ch::Channel)
+    for _ in 1:100
+        Threads.@spawn take!(ch)
+    end
+    sleep(10)
+end
 
-let r = Profile.retrieve()
-    mktemp() do path, io
-        serialize(io, r)
-        close(io)
-        open(path) do io
-            @test isa(deserialize(io), Tuple{Vector{UInt},Dict{UInt64,Vector{Base.StackTraces.StackFrame}}})
+function test_profile()
+    let r = Profile.retrieve()
+        mktemp() do path, io
+            serialize(io, r)
+            close(io)
+            open(path) do io
+                @test isa(deserialize(io), Tuple{Vector{UInt},Dict{UInt64,Vector{Base.StackTraces.StackFrame}}})
+            end
         end
     end
 end
+
+function test_has_task_profiler_sample_in_buffer()
+    let r = Profile.retrieve()
+        mktemp() do path, io
+            serialize(io, r)
+            close(io)
+            open(path) do io
+                all = deserialize(io)
+                data = all[1]
+                startframe = length(data)
+                for i in startframe:-1:1
+                    (startframe - 1) >= i >= (startframe - (Profile.nmeta + 1)) && continue # skip metadata (its read ahead below) and extra block end NULL IP
+                    if Profile.is_block_end(data, i)
+                        thread_sleeping_state = data[i - Profile.META_OFFSET_SLEEPSTATE]
+                        @test thread_sleeping_state == 0x3
+                    end
+                end
+            end
+        end
+    end
+end
+
+busywait(0, 0) # compile
+
+@profile_walltime busywait(1, 20)
+test_profile()
+
+Profile.clear()
+
+ch = Channel(1)
+@profile_walltime sleeping_tasks(ch)
+test_profile()
+close(ch)
+test_has_task_profiler_sample_in_buffer()
+
+Profile.clear()
+
+@profile busywait(1, 20)
+test_profile()
 
 let iobuf = IOBuffer()
     Profile.print(iobuf, format=:tree, C=true)
@@ -280,18 +325,44 @@ end
 
 @testset "HeapSnapshot" begin
     tmpdir = mktempdir()
+
+    # ensure that we can prevent redacting data
     fname = cd(tmpdir) do
-        read(`$(Base.julia_cmd()) --startup-file=no -e "using Profile; print(Profile.take_heap_snapshot())"`, String)
+        read(`$(Base.julia_cmd()) --startup-file=no -e "using Profile; const x = \"redact_this\"; print(Profile.take_heap_snapshot(; redact_data=false))"`, String)
     end
 
     @test isfile(fname)
 
-    open(fname) do fs
-        @test readline(fs) != ""
+    sshot = read(fname, String)
+    @test sshot != ""
+    @test contains(sshot, "redact_this")
+
+    rm(fname)
+
+    # ensure that string data is redacted by default
+    fname = cd(tmpdir) do
+        read(`$(Base.julia_cmd()) --startup-file=no -e "using Profile; const x = \"redact_this\"; print(Profile.take_heap_snapshot())"`, String)
     end
+
+    @test isfile(fname)
+
+    sshot = read(fname, String)
+    @test sshot != ""
+    @test !contains(sshot, "redact_this")
 
     rm(fname)
     rm(tmpdir, force = true, recursive = true)
 end
 
+@testset "PageProfile" begin
+    fname = "$(getpid())_$(time_ns())"
+    fpath = joinpath(tempdir(), fname)
+    Profile.take_page_profile(fpath)
+    open(fpath) do fs
+        @test readline(fs) != ""
+    end
+    rm(fpath)
+end
+
 include("allocs.jl")
+include("heapsnapshot_reassemble.jl")
