@@ -17,4 +17,16 @@ end
 
 const TN = Base.typename(MyType)
 
+function foo(x)
+    x
+end
+
+function foo(y::MyType)
+    sum(y.a) + y.b + y.c + y.d
+end
+
+precompile(Tuple{typeof(foo), Int})
+precompile(Tuple{typeof(foo), BigFloat})
+precompile(Tuple{typeof(foo), MyType})
+
 end # module DummyPkg

@@ -9,7 +9,7 @@
             "request": "launch",
             "name": "Debug lldb load",
             "program": "${workspaceFolder}/julia",
-            "args": ["--startup-file=no","-J/home/tomasd/_proj/raicode/sysimg/new_sysimg.so"],
+            "args": ["--startup-file=no","-J../raicode/sysimg/new_sysimg.so"],
             "cwd": "${workspaceFolder}",
             "initCommands": ["pro hand -p true -s false -n false SIGSEGV"]
         },
@@ -18,7 +18,7 @@
             "name": "Debug gdb load",
             "request": "launch",
             "target": "${workspaceFolder}/julia",
-            "arguments": "--startup-file=no -J/home/tomasd/_proj/raicode/sysimg/new_sysimg.so",
+            "arguments": "--startup-file=no -J../raicode/sysimg/new_sysimg.so",
             "cwd": "${workspaceFolder}",
             "debugger_args": ["--eval-command=\"handle SIGSEGV noprint nostop pass\""],
         },
@@ -27,7 +27,7 @@
             "request": "launch",
             "name": "Debug lldb write",
             "program": "${workspaceFolder}/julia",
-            "args": [" --startup-file=no ", " --output-o=sys.o "," -J\"${workspaceFolder}/usr/lib/julia/sys.so\" ", " ${workspaceFolder}/DummyPkg/build.jl "],
+            "args": ["--startup-file=no", "--output-o=sys.o", "-Jusr/lib/julia/sys-debug.so", "DummyPkg/build.jl"],
             "cwd": "${workspaceFolder}",
             "initCommands": ["pro hand -p true -s false -n false SIGSEGV"]
         },
@@ -36,7 +36,7 @@
             "name": "Debug gdb write",
             "request": "launch",
             "target": "${workspaceFolder}/julia",
-            "arguments": "--startup-file=no --output-o=sys.o -J\"${workspaceFolder}/usr/lib/julia/sys.so\" ${workspaceFolder}/DummyPkg/build.jl",
+            "arguments": "--startup-file=no --output-o=sys.o -J\"${workspaceFolder}/usr/lib/julia/sys-debug.so\" ${workspaceFolder}/DummyPkg/build.jl",
             "cwd": "${workspaceFolder}",
             "debugger_args": ["--eval-command=\"handle SIGSEGV noprint nostop pass\""],
         }

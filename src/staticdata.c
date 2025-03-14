@@ -118,7 +118,7 @@ void open_global_log_file(const char *filename) {
     global_log_stream = (JL_STREAM*)f;
 }
 
-void json_encode(ios_t *stream, const char* str, size_t len)
+void json_encode(JL_STREAM *stream, const char* str, size_t len)
 {
     ios_putc('"', stream);
     size_t i = 0;
@@ -134,13 +134,13 @@ void json_encode(ios_t *stream, const char* str, size_t len)
         case '\r': ios_write(stream, "\\r",  2); break;
         case '\t': ios_write(stream, "\\t",  2); break;
         default:
-            // if (('\x00' <= c) & (c <= '\x1f')) {
-            if ((' ' <= c) & (c <= '~')) { // only print "common ascii"
-                // ios_printf(stream, "\\u%04x", (int)c); TODO
-                ios_putc(c, stream);
+            if (('\x00' <= c) & (c <= '\x1f')) {
+            // if ((' ' <= c) & (c <= '~')) { // only print "common ascii"
+                ios_printf(stream, "\\u%04x", (int)c);
+                // ios_putc(c, stream);
             } else {
-                // ios_putc(c, stream); TODO
-                ios_putc('?', stream);
+                ios_putc(c, stream);
+                // ios_putc('?', stream);
             }
         }
         i += 1;
@@ -1367,6 +1367,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                 if ((ios_pos(s->const_data) - const_pos) > 0) {
                     jl_printf(global_log_stream, "ARRAY    ");
                     jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
+                    jl_printf(global_log_stream, "item: %li, ", item);
                     jl_printf(global_log_stream, "eltype: ");
                     jl_static_show(global_log_stream, et);
                     jl_printf(global_log_stream, ", len: %li, isbitsunion: %i\n", alen, isbitsunion);
@@ -1463,6 +1464,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
             write_pointer(f);
             jl_printf(global_log_stream, "BIGINT   ");
             jl_printf(global_log_stream, "tot_size: %7li\n", ios_pos(s->const_data) - const_pos);
+            jl_printf(global_log_stream, "item: %li, ", item);
         }
         else {
             // Generic object::DataType serialization by field
@@ -1658,7 +1660,9 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                         ios_write(s->const_data, (char*)&dyn, sizeof(jl_fielddescdyn_t));
                     }
                     jl_printf(global_log_stream, "DATATYPE ");
-                    jl_printf(global_log_stream, "tot_size: %7li, mod: ", ios_pos(s->const_data) - const_pos);
+                    jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
+                    jl_printf(global_log_stream, "item: %li, ", item);
+                    jl_printf(global_log_stream, "mod: ");
                     jl_static_show(global_log_stream, dt->name->module);
                     jl_printf(global_log_stream, ", isforeign: %i ", is_foreign_type);
                     jl_static_show(global_log_stream, v);
@@ -1696,6 +1700,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                 if ((ios_pos(s->const_data) - const_pos) > 0) {
                     jl_printf(global_log_stream, "TYPENAME ");
                     jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
+                    jl_printf(global_log_stream, "item: %li, ", item);
                     jl_printf(global_log_stream, "has_atomic: %i, has_const: %i,  ", tn->atomicfields != NULL, tn->constfields != NULL);
                     jl_static_show(global_log_stream, v);
                     jl_printf(global_log_stream, "\n");
@@ -1721,7 +1726,8 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
         if (f == s->const_data) {
             jl_printf(global_log_stream, "SMALLTAG ");
             jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
-            jl_static_show(global_log_stream, t);
+            jl_printf(global_log_stream, "item: %li, ", item);
+            jl_static_show(global_log_stream, (jl_value_t *)t);
             jl_printf(global_log_stream, " ");
             if (jl_is_string(v)) {
                 json_encode(global_log_stream, jl_string_data(v), jl_string_len(v));
@@ -1729,8 +1735,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                 jl_static_show(global_log_stream, v);
             }
             jl_printf(global_log_stream, "\n");
-        } else {
-            assert(const_pos == ios_pos(s->const_data));
+            if ((item % 1024) == 0) ios_flush(global_log_stream);
         }
     }
     assert(s->uniquing_super.len == 0);
