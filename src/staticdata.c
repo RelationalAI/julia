@@ -101,6 +101,66 @@ extern "C" {
 
 #define NUM_TAGS    159
 
+JL_STREAM* global_log_stream = NULL;
+ios_t global_log_file;
+
+void close_global_log_file(void) {
+    ios_flush(&global_log_file);
+    ios_close(&global_log_file);
+    global_log_stream = NULL;
+}
+void open_global_log_file(const char *filename) {
+    ios_t *f = ios_file(&global_log_file, filename, 1, 1, 1, 1);
+    if (f == NULL) {
+            jl_errorf("cannot open log file \"%s\" for writing", filename);
+            close_global_log_file();
+    };
+    global_log_stream = (JL_STREAM*)f;
+}
+
+void json_encode(JL_STREAM *stream, const char* str, size_t len)
+{
+    ios_putc('"', stream);
+    size_t i = 0;
+    char c;
+    while (i < len) {
+        c = str[i];
+        switch (c) {
+        case '"':  ios_write(stream, "\\\"", 2); break;
+        case '\\': ios_write(stream, "\\\\", 2); break;
+        case '\b': ios_write(stream, "\\b",  2); break;
+        case '\f': ios_write(stream, "\\f",  2); break;
+        case '\n': ios_write(stream, "\\n",  2); break;
+        case '\r': ios_write(stream, "\\r",  2); break;
+        case '\t': ios_write(stream, "\\t",  2); break;
+        default:
+            if (('\x00' <= c) & (c <= '\x1f')) {
+            // if ((' ' <= c) & (c <= '~')) { // only print "common ascii"
+                ios_printf(stream, "\\u%04x", (int)c);
+                // ios_putc(c, stream);
+            } else {
+                ios_putc(c, stream);
+                // ios_putc('?', stream);
+            }
+        }
+        i += 1;
+    }
+    ios_putc('"', stream);
+}
+
+void trace_method_codeinfo(jl_method_t *m) {
+    jl_value_t *ci_ = m->source;
+    jl_code_info_t *ci = NULL;
+    if (!jl_is_code_info(ci_)) {
+        ci = jl_uncompress_ir(m, NULL, (jl_value_t*)ci_);
+    }
+    else {
+        ci = (jl_code_info_t*)ci_;
+    }
+    jl_compress_ir_traced(m, ci, global_log_stream);
+    ios_puts("\n", global_log_stream);
+}
+
 // An array of references that need to be restored from the sysimg
 // This is a manually constructed dual of the gvars array, which would be produced by codegen for Julia code, for C.
 jl_value_t **const*const get_tags(void) {
@@ -727,7 +787,6 @@ static void jl_insert_into_serialization_queue(jl_serializer_state *s, jl_value_
     jl_datatype_t *t = (jl_datatype_t*)jl_typeof(v);
     jl_queue_for_serialization_(s, (jl_value_t*)t, 1, immediate);
     const jl_datatype_layout_t *layout = t->layout;
-
     if (!recursive)
         goto done_fields;
 
@@ -841,6 +900,13 @@ static void jl_insert_into_serialization_queue(jl_serializer_state *s, jl_value_
         jl_queue_module_for_serialization(s, (jl_module_t*)v);
     }
     else if (layout->nfields > 0) {
+        // if jl_is_method(v) {
+        //     last_method = *v;
+        // }
+        if jl_is_code_instance(v) {
+            // jl_(v);
+            size_t b = 0;
+        }
         char *data = (char*)jl_data_ptr(v);
         size_t i, np = layout->npointers;
         for (i = 0; i < np; i++) {
@@ -850,6 +916,9 @@ static void jl_insert_into_serialization_queue(jl_serializer_state *s, jl_value_
                 mutabl = 0;
             jl_value_t *fld = get_replaceable_field(&((jl_value_t**)data)[ptr], mutabl);
             jl_queue_for_serialization_(s, fld, 1, immediate);
+            // if (jl_is_code_instance(v) && i == 4 && jl_is_string(fld)) {
+            //     jl_code_info_t *ci =  jl_uncompress_ir(last_method, NULL, fld);
+            // }
         }
     }
 
@@ -1181,13 +1250,14 @@ jl_value_t *jl_find_ptr = NULL;
 static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
 {
     size_t l = serialization_queue.len;
-
+    size_t const_pos;
     arraylist_new(&layout_table, 0);
     arraylist_grow(&layout_table, l * 2);
     memset(layout_table.items, 0, l * 2 * sizeof(void*));
 
     // Serialize all entries
     for (size_t item = 0; item < l; item++) {
+        const_pos = ios_pos(s->const_data);
         jl_value_t *v = (jl_value_t*)serialization_queue.items[item];           // the object
         JL_GC_PROMISE_ROOTED(v);
         assert(!(s->incremental && jl_object_in_image(v)));
@@ -1205,7 +1275,6 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
         // realign stream to expected gc alignment (16 bytes)
         uintptr_t skip_header_pos = ios_pos(f) + sizeof(jl_taggedvalue_t);
         write_padding(f, LLT_ALIGN(skip_header_pos, 16) - skip_header_pos);
-
         // write header
         if (s->incremental && jl_needs_serialization(s, (jl_value_t*)t) && needs_uniquing((jl_value_t*)t))
             arraylist_push(&s->uniquing_types, (void*)(uintptr_t)(ios_pos(f)|1));
@@ -1288,6 +1357,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
 
             // write data
             if (!ar->flags.ptrarray && !ar->flags.hasptr) {
+                assert(const_pos == ios_pos(s->const_data));
                 // Non-pointer eltypes get encoded in the const_data section
                 uintptr_t data = LLT_ALIGN(ios_pos(s->const_data), alignment_amt);
                 write_padding(s->const_data, data - ios_pos(s->const_data));
@@ -1316,6 +1386,14 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                     else {
                         ios_write(s->const_data, (char*)jl_array_data(ar), tot);
                     }
+                }
+                if ((ios_pos(s->const_data) - const_pos) > 0) {
+                    jl_printf(global_log_stream, "ARRAY    ");
+                    jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
+                    jl_printf(global_log_stream, "item: %li, ", item);
+                    jl_printf(global_log_stream, "eltype: ");
+                    jl_static_show(global_log_stream, et);
+                    jl_printf(global_log_stream, ", len: %li, isbitsunion: %i\n", alen, isbitsunion);
                 }
             }
             else {
@@ -1389,6 +1467,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
             ios_write(f, (char*)v, jl_datatype_size(t));
         }
         else if (jl_bigint_type && jl_typetagis(v, jl_bigint_type)) {
+            assert(const_pos == ios_pos(s->const_data));
             // foreign types require special handling
             assert(f == s->s);
             jl_value_t *sizefield = jl_get_nth_field(v, 1);
@@ -1406,6 +1485,9 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
             void *pdata = jl_unbox_voidpointer(jl_get_nth_field(v, 2));
             ios_write(s->const_data, (char*)pdata, nb);
             write_pointer(f);
+            jl_printf(global_log_stream, "BIGINT   ");
+            jl_printf(global_log_stream, "tot_size: %7li\n", ios_pos(s->const_data) - const_pos);
+            jl_printf(global_log_stream, "item: %li, ", item);
         }
         else {
             // Generic object::DataType serialization by field
@@ -1574,6 +1656,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                 jl_datatype_t *newdt = (jl_datatype_t*)&f->buf[reloc_offset];
 
                 if (dt->layout != NULL) {
+                    assert(const_pos == ios_pos(s->const_data));
                     size_t nf = dt->layout->nfields;
                     size_t np = dt->layout->npointers;
                     size_t fieldsize = 0;
@@ -1599,6 +1682,14 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                         jl_fielddescdyn_t dyn = {0, 0};
                         ios_write(s->const_data, (char*)&dyn, sizeof(jl_fielddescdyn_t));
                     }
+                    jl_printf(global_log_stream, "DATATYPE ");
+                    jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
+                    jl_printf(global_log_stream, "item: %li, ", item);
+                    jl_printf(global_log_stream, "mod: ");
+                    jl_static_show(global_log_stream, dt->name->module);
+                    jl_printf(global_log_stream, ", isforeign: %i ", is_foreign_type);
+                    jl_static_show(global_log_stream, v);
+                    jl_printf(global_log_stream, "\n");
                 }
                 void *superidx = ptrhash_get(&serialization_order, dt->super);
                 if (s->incremental && superidx != HT_NOTFOUND && (char*)superidx - 1 - (char*)HT_NOTFOUND > item && needs_uniquing((jl_value_t*)dt->super))
@@ -1606,6 +1697,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
             }
             else if (jl_is_typename(v)) {
                 assert(f == s->s);
+                assert(const_pos == ios_pos(s->const_data));
                 jl_typename_t *tn = (jl_typename_t*)v;
                 jl_typename_t *newtn = (jl_typename_t*)&f->buf[reloc_offset];
                 if (tn->atomicfields != NULL) {
@@ -1628,6 +1720,14 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                     arraylist_push(&s->relocs_list, (void*)(((uintptr_t)ConstDataRef << RELOC_TAG_OFFSET) + layout)); // relocation target
                     ios_write(s->const_data, (char*)tn->constfields, nb);
                 }
+                if ((ios_pos(s->const_data) - const_pos) > 0) {
+                    jl_printf(global_log_stream, "TYPENAME ");
+                    jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
+                    jl_printf(global_log_stream, "item: %li, ", item);
+                    jl_printf(global_log_stream, "has_atomic: %i, has_const: %i,  ", tn->atomicfields != NULL, tn->constfields != NULL);
+                    jl_static_show(global_log_stream, v);
+                    jl_printf(global_log_stream, "\n");
+                }
             }
             else if (jl_is_globalref(v)) {
                 assert(f == s->s);
@@ -1645,6 +1745,22 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
             else {
                 write_padding(f, jl_datatype_size(t) - tot);
             }
+        }
+        if (f == s->const_data) {
+            jl_printf(global_log_stream, "SMALLTAG ");
+            jl_printf(global_log_stream, "tot_size: %7li, ", ios_pos(s->const_data) - const_pos);
+            jl_printf(global_log_stream, "item: %li, ", item);
+            if jl_is_code_info(v) jl_printf(global_log_stream, "CODEINFO, ");
+
+            jl_static_show(global_log_stream, (jl_value_t *)t);
+            jl_printf(global_log_stream, " ");
+            if (jl_is_string(v)) {
+                json_encode(global_log_stream, jl_string_data(v), jl_string_len(v));
+            } else {
+                jl_static_show(global_log_stream, v);
+            }
+            jl_printf(global_log_stream, "\n");
+            if ((item % 1024) == 0) ios_flush(global_log_stream);
         }
     }
     assert(s->uniquing_super.len == 0);
@@ -1728,7 +1844,7 @@ static uintptr_t get_reloc_for_item(uintptr_t reloc_item, size_t reloc_offset)
 }
 
 // Compute target location at deserialization
-static inline uintptr_t get_item_for_reloc(jl_serializer_state *s, uintptr_t base, uintptr_t reloc_id, jl_array_t *link_ids, int *link_index) JL_NOTSAFEPOINT
+static inline uintptr_t get_item_for_reloc(jl_serializer_state *s, uintptr_t base, uintptr_t reloc_id, jl_array_t *link_ids, int *link_index, const char* src) JL_NOTSAFEPOINT
 {
     enum RefTags tag = (enum RefTags)(reloc_id >> RELOC_TAG_OFFSET);
     size_t offset = (reloc_id & (((uintptr_t)1 << RELOC_TAG_OFFSET) - 1));
@@ -1739,7 +1855,20 @@ static inline uintptr_t get_item_for_reloc(jl_serializer_state *s, uintptr_t bas
     case ConstDataRef:
         offset *= sizeof(void*);
         assert(offset <= s->const_data->size);
-        return (uintptr_t)s->const_data->buf + offset;
+        uintptr_t v = (uintptr_t)s->const_data->buf + offset;
+        // if (src != "jl_read_reloclist") {
+            // fprintf(stderr, "%9u ", (unsigned)offset);
+            // ios_puts(src, ios_stderr);
+            // ios_puts(" ", ios_stderr);
+            // fprintf(stderr, "%3iMB/", offset / (1024*1024));
+            // fprintf(stderr, "%3liMB ", s->const_data->size / (1024*1024));
+            // fprintf(stderr, "%u ", v);
+            // jl__(jl_typeof((jl_value_t*)(v)));
+            // ios_puts(" ", ios_stderr);
+            // jl__(v);
+            // ios_puts("\n", ios_stderr);
+        // }
+        return v;
     case SymbolRef:
         assert(offset < deser_sym.len && deser_sym.items[offset] && "corrupt relocation item id");
         return (uintptr_t)deser_sym.items[offset];
@@ -1799,6 +1928,7 @@ static inline uintptr_t get_item_for_reloc(jl_serializer_state *s, uintptr_t bas
         return (uintptr_t)jl_linkage_blobs.items[2*i] + offset*sizeof(void*);
     }
     case ExternalLinkage: {
+        ios_puts("ExternalLinkage\n",ios_stderr);
         assert(link_ids);
         assert(link_index);
         assert(0 <= *link_index && *link_index < jl_array_len(link_ids));
@@ -1859,7 +1989,7 @@ static void jl_write_arraylist(ios_t *s, arraylist_t *list)
     ios_write(s, (const char*)list->items, list->len * sizeof(void*));
 }
 
-static void jl_read_reloclist(jl_serializer_state *s, jl_array_t *link_ids, uint8_t bits)
+static void jl_read_reloclist(jl_serializer_state *s, jl_array_t *link_ids, uint8_t bits, const char* src)
 {
     uintptr_t base = (uintptr_t)s->s->buf;
     uintptr_t last_pos = 0;
@@ -1886,9 +2016,14 @@ static void jl_read_reloclist(jl_serializer_state *s, jl_array_t *link_ids, uint
         last_pos = pos;
         uintptr_t *pv = (uintptr_t *)(base + pos);
         uintptr_t v = *pv;
-        v = get_item_for_reloc(s, base, v, link_ids, &link_index);
-        if (bits && v && ((jl_datatype_t*)v)->smalltag)
-            v = (uintptr_t)((jl_datatype_t*)v)->smalltag << 4; // TODO: should we have a representation that supports sweep without a relocation step?
+        // enum RefTags tag = (enum RefTags)(v >> RELOC_TAG_OFFSET);
+        v = get_item_for_reloc(s, base, v, link_ids, &link_index, src);
+        if (bits && v && ((jl_datatype_t*)v)->smalltag) {
+            v = (uintptr_t)((jl_datatype_t*)v)->smalltag << 4;
+        } // TODO: should we have a representation that supports sweep without a relocation step?
+        // if (tag == ConstDataRef) {
+        //     jl_(v);
+        // }
         *pv = v | bits;
     }
     assert(!link_ids || link_index == jl_array_len(link_ids));
@@ -1960,7 +2095,7 @@ static jl_value_t *jl_read_value(jl_serializer_state *s)
     s->s->bpos += sizeof(reloc_t);
     if (offset == 0)
         return NULL;
-    return (jl_value_t*)get_item_for_reloc(s, base, offset, NULL, NULL);
+    return (jl_value_t*)get_item_for_reloc(s, base, offset, NULL, NULL, "jl_read_value");
 }
 
 // The next two, `jl_read_offset` and `jl_delayed_reloc`, are essentially a split version
@@ -1985,7 +2120,7 @@ static jl_value_t *jl_delayed_reloc(jl_serializer_state *s, uintptr_t offset) JL
         return NULL;
     uintptr_t base = (uintptr_t)s->s->buf;
     int link_index = 0;
-    jl_value_t *ret = (jl_value_t*)get_item_for_reloc(s, base, offset, s->link_ids_relocs, &link_index);
+    jl_value_t *ret = (jl_value_t*)get_item_for_reloc(s, base, offset, s->link_ids_relocs, &link_index, "jl_delayed_reloc");
     assert(!s->link_ids_relocs || link_index < jl_array_len(s->link_ids_relocs));
     return ret;
 }
@@ -2010,6 +2145,7 @@ static void jl_update_all_fptrs(jl_serializer_state *s, jl_image_t *image)
     jl_method_instance_t **linfos = (jl_method_instance_t**)&s->fptr_record->buf[0];
     uint32_t clone_idx = 0;
     for (i = 0; i < img_fvars_max; i++) {
+        // if (i % 1024 == 0) fprintf(stderr, "jl_update_all_fptrs %i/%i\n", i, img_fvars_max);
         reloc_t offset = *(reloc_t*)&linfos[i];
         linfos[i] = NULL;
         if (offset != 0) {
@@ -2084,10 +2220,10 @@ static void jl_update_all_gvars(jl_serializer_state *s, jl_image_t *image, uint3
         uintptr_t offset = gvars[i];
         uintptr_t v = 0;
         if (i < external_fns_begin) {
-            v = get_item_for_reloc(s, base, offset, s->link_ids_gvars, &gvar_link_index);
+            v = get_item_for_reloc(s, base, offset, s->link_ids_gvars, &gvar_link_index, "jl_update_all_gvars");
         }
         else {
-            v = get_item_for_reloc(s, base, offset, s->link_ids_external_fnvars, &external_fns_link_index);
+            v = get_item_for_reloc(s, base, offset, s->link_ids_external_fnvars, &external_fns_link_index, "jl_update_all_gvars extern");
         }
         uintptr_t *gv = sysimg_gvars(image->gvars_base, image->gvars_offsets, i);
         *gv = v;
@@ -2190,6 +2326,11 @@ static jl_value_t *strip_codeinfo_meta(jl_method_t *m, jl_value_t *ci_, int orig
     else {
         ci = (jl_code_info_t*)ci_;
     }
+    // jl_static_show(global_log_stream, "CODEINFO ");
+    // jl_printf(global_log_stream, "%i ", jl_string_len(_ci));
+    // jl_static_show(global_log_stream, ci);
+    // jl_printf(global_log_stream, "\n");
+    jl_compress_ir_traced(m, ci, global_log_stream);
     // leave codelocs length the same so the compiler can assume that; just zero it
     memset(jl_array_data(ci->codelocs), 0, jl_array_len(ci->codelocs)*sizeof(int32_t));
     // empty linetable
@@ -2226,6 +2367,9 @@ static void strip_specializations_(jl_method_instance_t *mi)
             }
             else if (jl_options.strip_metadata) {
                 jl_value_t *stripped = strip_codeinfo_meta(mi->def.method, inferred, 0);
+                ios_puts(", mi: ", global_log_stream);
+                jl_static_show(global_log_stream, mi);
+                jl_printf(global_log_stream, " @ ci:%p\n", codeinst);
                 if (jl_atomic_cmpswap_relaxed(&codeinst->inferred, &inferred, stripped)) {
                     jl_gc_wb(codeinst, stripped);
                 }
@@ -2250,6 +2394,7 @@ static int strip_all_codeinfos__(jl_typemap_entry_t *def, void *_env)
                 jl_code_instance_t *unspec = jl_atomic_load_relaxed(&m->unspecialized->cache);
                 if (unspec && jl_atomic_load_relaxed(&unspec->invoke)) {
                     // we have a generic compiled version, so can remove the IR
+                    trace_method_codeinfo(m);
                     record_field_change(&m->source, jl_nothing);
                     stripped_ir = 1;
                 }
@@ -2258,6 +2403,7 @@ static int strip_all_codeinfos__(jl_typemap_entry_t *def, void *_env)
                 int mod_setting = jl_get_module_compile(m->module);
                 // if the method is declared not to be compiled, keep IR for interpreter
                 if (!(mod_setting == JL_OPTIONS_COMPILE_OFF || mod_setting == JL_OPTIONS_COMPILE_MIN)) {
+                    trace_method_codeinfo(m);
                     record_field_change(&m->source, jl_nothing);
                     stripped_ir = 1;
                 }
@@ -2265,6 +2411,7 @@ static int strip_all_codeinfos__(jl_typemap_entry_t *def, void *_env)
         }
         if (jl_options.strip_metadata && !stripped_ir) {
             m->source = strip_codeinfo_meta(m, m->source, 1);
+            ios_puts("\n", global_log_stream);
             jl_gc_wb(m, m->source);
         }
     }
@@ -2783,7 +2930,9 @@ JL_DLLEXPORT void jl_create_system_image(void **_native_data, jl_array_t *workli
     }
     if (_native_data != NULL)
         native_functions = *_native_data;
+    open_global_log_file("const_data_logs.txt");
     jl_save_system_image_to_stream(ff, mod_array, worklist, extext_methods, new_specializations, method_roots_list, ext_targets, edges);
+    close_global_log_file();
     if (_native_data != NULL)
         native_functions = NULL;
     // make sure we don't run any Julia code concurrently before this point
@@ -3008,10 +3157,10 @@ static void jl_restore_system_image_from_stream_(ios_t *f, jl_image_t *image, jl
         *base = image_base;
 
     s.s = &sysimg;
-    jl_read_reloclist(&s, s.link_ids_gctags, GC_OLD | GC_IN_IMAGE); // gctags
+    jl_read_reloclist(&s, s.link_ids_gctags, GC_OLD | GC_IN_IMAGE, "jl_read_reloclist gc"); // gctags
     size_t sizeof_tags = ios_pos(&relocs);
     (void)sizeof_tags;
-    jl_read_reloclist(&s, s.link_ids_relocs, 0); // general relocs
+    jl_read_reloclist(&s, s.link_ids_relocs, 0, "jl_read_reloclist 0"); // general relocs
     // s.link_ids_gvars will be processed in `jl_update_all_gvars`
     // s.link_ids_external_fns will be processed in `jl_update_all_gvars`
     jl_update_all_gvars(&s, image, external_fns_begin); // gvars relocs
@@ -3319,15 +3468,15 @@ static void jl_restore_system_image_from_stream_(ios_t *f, jl_image_t *image, jl
 
     s.s = NULL;
 
-    if (0) {
+    if (1) {
         printf("sysimg size breakdown:\n"
-               "     sys data: %8u\n"
-               "  isbits data: %8u\n"
-               "      symbols: %8u\n"
-               "    tags list: %8u\n"
-               "   reloc list: %8u\n"
-               "    gvar list: %8u\n"
-               "    fptr list: %8u\n",
+               "     sys data: %9u\n"
+               "  isbits data: %9u\n"
+               "      symbols: %9u\n"
+               "    tags list: %9u\n"
+               "   reloc list: %9u\n"
+               "    gvar list: %9u\n"
+               "    fptr list: %9u\n",
             (unsigned)sizeof_sysdata,
             (unsigned)sizeof_constdata,
             (unsigned)sizeof_symbols,
