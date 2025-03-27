@@ -13,6 +13,8 @@
 #include "support/strtod.h"
 #include "gc-alloc-profiler.h"
 #include "support/rle.h"
+#include <ctype.h>
+#include <stdint.h>
 #include <uv.h>
 #include <llvm-c/Types.h>
 #include <llvm-c/Orc.h>
@@ -206,6 +208,38 @@ JL_DLLEXPORT void jl_unlock_profile_wr(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEA
 int jl_lock_stackwalk(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_ENTER;
 void jl_unlock_stackwalk(int lockret) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEAVE;
 
+arraylist_t *jl_get_all_tasks_arraylist(void) JL_NOTSAFEPOINT;
+typedef struct {
+    size_t bt_size;
+    int tid;
+} jl_record_backtrace_result_t;
+JL_DLLEXPORT JL_DLLEXPORT size_t jl_try_record_thread_backtrace(jl_ptls_t ptls2, struct _jl_bt_element_t *bt_data,
+                                                                size_t max_bt_size) JL_NOTSAFEPOINT;
+JL_DLLEXPORT jl_record_backtrace_result_t jl_record_backtrace(jl_task_t *t, struct _jl_bt_element_t *bt_data,
+                                                              size_t max_bt_size, int all_tasks_profiler) JL_NOTSAFEPOINT;
+extern volatile struct _jl_bt_element_t *profile_bt_data_prof;
+extern volatile size_t profile_bt_size_max;
+extern volatile size_t profile_bt_size_cur;
+extern volatile int profile_running;
+extern volatile int profile_all_tasks;
+extern int heartbeat_tid; // Mostly used to ensure we skip this thread in the CPU profiler. XXX: not implemented on Windows
+// Ensures that we can safely read the `live_tasks`field of every TLS when profiling.
+// We want to avoid the case that a GC gets interleaved with `jl_profile_task` and shrinks
+// the `live_tasks` array while we are reading it or frees tasks that are being profiled.
+// Because of that, this lock must be held in `jl_profile_task` and `sweep_stack_pools_and_mtarraylist_buffers`.
+extern uv_mutex_t live_tasks_lock;
+// Ensures that we can safely write to `profile_bt_data_prof` and `profile_bt_size_cur`.
+// We want to avoid the case that:
+// - We start to profile a task very close to the profiling time window end.
+// - The profiling time window ends and we start to read the profile data in a compute thread.
+// - We write to the profile in a profiler thread while the compute thread is reading it.
+// Locking discipline: `bt_data_prof_lock` must be held inside the scope of `live_tasks_lock`.
+extern uv_mutex_t bt_data_prof_lock;
+#define PROFILE_STATE_THREAD_NOT_SLEEPING (1)
+#define PROFILE_STATE_THREAD_SLEEPING (2)
+#define PROFILE_STATE_WALL_TIME_PROFILING (3)
+void jl_profile_task(void);
+
 // number of cycles since power-on
 static inline uint64_t cycleclock(void) JL_NOTSAFEPOINT
 {
@@ -273,6 +307,9 @@ static inline uint64_t cycleclock(void) JL_NOTSAFEPOINT
 extern JL_DLLEXPORT _Atomic(uint8_t) jl_measure_compile_time_enabled;
 extern JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_compile_time;
 extern JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_recompile_time;
+
+// Global *atomic* integer controlling *process-wide* task timing.
+extern JL_DLLEXPORT _Atomic(uint8_t) jl_task_metrics_enabled;
 
 #define jl_return_address() ((uintptr_t)__builtin_return_address(0))
 
@@ -375,24 +412,48 @@ static const int jl_gc_sizeclasses[] = {
     144, 160, 176, 192, 208, 224, 240, 256,
 
     // the following tables are computed for maximum packing efficiency via the formula:
-    // pg = 2^14
+    // pg = GC_SMALL_PAGE ? 2^12 : 2^14
     // sz = (div.(pg-8, rng).÷16)*16; hcat(sz, (pg-8).÷sz, pg .- (pg-8).÷sz.*sz)'
 
+#ifdef GC_SMALL_PAGE
+    // rng = 15:-1:2 (14 pools)
+    272, 288, 304, 336, 368, 400, 448, 496, 576, 672, 816, 1008, 1360, 2032
+//  15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, /pool
+//  16, 64, 144, 64, 48, 96, 64, 128, 64, 64, 16, 64, 16, 32, bytes lost
+#else
     // rng = 60:-4:32 (8 pools)
     272, 288, 304, 336, 368, 400, 448, 496,
-//   60,  56,  53,  48,  44,  40,  36,  33, /pool
-//   64, 256, 272, 256, 192, 384, 256,  16, bytes lost
+//  60, 56, 53, 48, 44, 40, 36, 33, /pool
+//  64, 256, 272, 256, 192, 384, 256,  16, bytes lost
 
     // rng = 30:-2:16 (8 pools)
     544, 576, 624, 672, 736, 816, 896, 1008,
-//   30,  28,  26,  24,  22,  20,  18,  16, /pool
-//   64, 256, 160, 256, 192,  64, 256, 256, bytes lost
+//  30, 28, 26, 24, 22, 20, 18, 16, /pool
+//  64, 256, 160, 256, 192,  64, 256, 256, bytes lost
 
     // rng = 15:-1:8 (8 pools)
     1088, 1168, 1248, 1360, 1488, 1632, 1808, 2032
-//    15,   14,   13,   12,   11,   10,    9,    8, /pool
-//    64,   32,  160,   64,   16,   64,  112,  128, bytes lost
+//   15, 14, 13, 12, 11, 10, 9, 8, /pool
+//   64, 32, 160, 64, 16, 64, 112,  128, bytes lost
+#endif
 };
+#ifdef GC_SMALL_PAGE
+#ifdef _P64
+#  define JL_GC_N_POOLS 39
+#elif MAX_ALIGN == 8
+#  define JL_GC_N_POOLS 40
+#else
+#  define JL_GC_N_POOLS 41
+#endif
+#else
+#ifdef _P64
+#  define JL_GC_N_POOLS 49
+#elif MAX_ALIGN == 8
+#  define JL_GC_N_POOLS 50
+#else
+#  define JL_GC_N_POOLS 51
+#endif
+#endif
 static_assert(sizeof(jl_gc_sizeclasses) / sizeof(jl_gc_sizeclasses[0]) == JL_GC_N_POOLS, "");
 
 STATIC_INLINE int jl_gc_alignment(size_t sz) JL_NOTSAFEPOINT
@@ -419,7 +480,12 @@ JL_DLLEXPORT int jl_alignment(size_t sz) JL_NOTSAFEPOINT;
 
 // the following table is computed as:
 // [searchsortedfirst(jl_gc_sizeclasses, i) - 1 for i = 0:16:jl_gc_sizeclasses[end]]
-static const uint8_t szclass_table[] = {0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 28, 29, 29, 30, 30, 31, 31, 31, 32, 32, 32, 33, 33, 33, 34, 34, 35, 35, 35, 36, 36, 36, 37, 37, 37, 37, 38, 38, 38, 38, 38, 39, 39, 39, 39, 39, 40, 40, 40, 40, 40, 40, 40, 41, 41, 41, 41, 41, 42, 42, 42, 42, 42, 43, 43, 43, 43, 43, 44, 44, 44, 44, 44, 44, 44, 45, 45, 45, 45, 45, 45, 45, 45, 46, 46, 46, 46, 46, 46, 46, 46, 46, 47, 47, 47, 47, 47, 47, 47, 47, 47, 47, 47, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48};
+static const uint8_t szclass_table[] =
+#ifdef GC_SMALL_PAGE
+    {0,1,3,5,7,9,11,13,15,17,18,19,20,21,22,23,24,25,26,27,28,28,29,29,30,30,31,31,31,32,32,32,33,33,33,33,33,34,34,34,34,34,34,35,35,35,35,35,35,35,35,35,36,36,36,36,36,36,36,36,36,36,36,36,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38,38};
+#else
+    {0,1,3,5,7,9,11,13,15,17,18,19,20,21,22,23,24,25,26,27,28,28,29,29,30,30,31,31,31,32,32,32,33,33,33,34,34,35,35,35,36,36,36,37,37,37,37,38,38,38,38,38,39,39,39,39,39,40,40,40,40,40,40,40,41,41,41,41,41,42,42,42,42,42,43,43,43,43,43,44,44,44,44,44,44,44,45,45,45,45,45,45,45,45,46,46,46,46,46,46,46,46,46,47,47,47,47,47,47,47,47,47,47,47,48,48,48,48,48,48,48,48,48,48,48,48,48,48};
+#endif
 static_assert(sizeof(szclass_table) == 128, "");
 
 STATIC_INLINE uint8_t JL_CONST_FUNC jl_gc_szclass(unsigned sz) JL_NOTSAFEPOINT
@@ -469,7 +535,7 @@ STATIC_INLINE jl_value_t *jl_gc_alloc_(jl_ptls_t ptls, size_t sz, void *ty)
     const size_t allocsz = sz + sizeof(jl_taggedvalue_t);
     if (sz <= GC_MAX_SZCLASS) {
         int pool_id = jl_gc_szclass(allocsz);
-        jl_gc_pool_t *p = &ptls->heap.norm_pools[pool_id];
+        jl_gc_pool_t *p = &ptls->gc_tls.heap.norm_pools[pool_id];
         int osize = jl_gc_sizeclasses[pool_id];
         // We call `jl_gc_pool_alloc_noinline` instead of `jl_gc_pool_alloc` to avoid double-counting in
         // the Allocations Profiler. (See https://github.com/JuliaLang/julia/pull/43868 for more details.)
@@ -506,7 +572,7 @@ JL_DLLEXPORT jl_value_t *jl_gc_alloc(jl_ptls_t ptls, size_t sz, void *ty);
 // defined as uint64_t[3] so that we can get the right alignment of this and a "type tag" on it
 const extern uint64_t _jl_buff_tag[3];
 #define jl_buff_tag ((uintptr_t)LLT_ALIGN((uintptr_t)&_jl_buff_tag[1],16))
-JL_DLLEXPORT uintptr_t jl_get_buff_tag(void);
+JL_DLLEXPORT uintptr_t jl_get_buff_tag(void) JL_NOTSAFEPOINT;
 
 typedef void jl_gc_tracked_buffer_t; // For the benefit of the static analyzer
 STATIC_INLINE jl_gc_tracked_buffer_t *jl_gc_alloc_buf(jl_ptls_t ptls, size_t sz)
@@ -569,6 +635,7 @@ JL_DLLEXPORT void JL_NORETURN jl_throw_out_of_memory_error(void);
 JL_DLLEXPORT int64_t jl_gc_diff_total_bytes(void) JL_NOTSAFEPOINT;
 JL_DLLEXPORT int64_t jl_gc_sync_total_bytes(int64_t offset) JL_NOTSAFEPOINT;
 void jl_gc_track_malloced_array(jl_ptls_t ptls, jl_array_t *a) JL_NOTSAFEPOINT;
+size_t jl_array_nbytes(jl_array_t *a) JL_NOTSAFEPOINT;
 void jl_gc_count_allocd(size_t sz) JL_NOTSAFEPOINT;
 void jl_gc_run_all_finalizers(jl_task_t *ct);
 void jl_release_task_stack(jl_ptls_t ptls, jl_task_t *task);
@@ -673,6 +740,32 @@ JL_CALLABLE(jl_f_opaque_closure_call);
 void jl_install_default_signal_handlers(void);
 void restore_signals(void);
 void jl_install_thread_signal_handler(jl_ptls_t ptls);
+extern const size_t sig_stack_size;
+STATIC_INLINE int is_addr_on_sigstack(jl_ptls_t ptls, void *ptr)
+{
+    // One guard page for signal_stack.
+    return !((char*)ptr < (char*)ptls->signal_stack - jl_page_size ||
+             (char*)ptr > (char*)ptls->signal_stack + sig_stack_size);
+}
+STATIC_INLINE int jl_inside_signal_handler(void)
+{
+#if (defined(_OS_LINUX_) && defined(_CPU_X86_64_)) || (defined(_OS_DARWIN_) && defined(_CPU_AARCH64_))
+    // Read the stack pointer
+    size_t sp;
+#if defined(_OS_LINUX_) && defined(_CPU_X86_64_)
+    __asm__ __volatile__("movq %%rsp, %0" : "=r"(sp));
+#elif defined(_OS_DARWIN_) && defined(_CPU_AARCH64_)
+    __asm__ __volatile__("mov %0, sp" : "=r"(sp));
+#endif
+    // Check if the stack pointer is within the signal stack
+    jl_ptls_t ptls = jl_current_task->ptls;
+    return is_addr_on_sigstack(ptls, (void*)sp);
+#else
+    return 0;
+#endif
+}
+// File-descriptor for safe logging on signal handling
+extern int jl_sig_fd;
 
 JL_DLLEXPORT jl_fptr_args_t jl_get_builtin_fptr(jl_value_t *b);
 
@@ -794,6 +887,33 @@ jl_opaque_closure_t *jl_new_opaque_closure(jl_tupletype_t *argt, jl_value_t *rt_
     jl_value_t *source,  jl_value_t **env, size_t nenv, int do_compile);
 JL_DLLEXPORT int jl_is_valid_oc_argtype(jl_tupletype_t *argt, jl_method_t *source);
 
+STATIC_INLINE int is10digit(char c) JL_NOTSAFEPOINT
+{
+    return (c >= '0' && c <= '9');
+}
+
+STATIC_INLINE int is_anonfn_typename(char *name)
+{
+    if (name[0] != '#' || name[1] == '#')
+        return 0;
+    char *other = strrchr(name, '#');
+    return other > &name[1] && is10digit(other[1]);
+}
+
+// Returns true for typenames of anounymous functions that have been canonicalized (i.e.
+// we mangled the name of the outermost enclosing function in their name).
+STATIC_INLINE int is_canonicalized_anonfn_typename(char *name) JL_NOTSAFEPOINT
+{
+    char *delim = strchr(&name[1], '#');
+    if (delim == NULL)
+        return 0;
+    if (delim[1] != '#')
+        return 0;
+    if (!is10digit(delim[2]))
+        return 0;
+    return 1;
+}
+
 // Each tuple can exist in one of 4 Vararg states:
 //   NONE: no vararg                            Tuple{Int,Float32}
 //   INT: vararg with integer length            Tuple{Int,Vararg{Float32,2}}
@@ -885,8 +1005,10 @@ extern JL_DLLEXPORT ssize_t jl_tls_offset;
 extern JL_DLLEXPORT const int jl_tls_elf_support;
 void jl_init_threading(void);
 void jl_start_threads(void);
+void jl_start_gc_threads(void);
 
 // Whether the GC is running
+extern uv_mutex_t safepoint_lock;
 extern char *jl_safepoint_pages;
 STATIC_INLINE int jl_addr_is_safepoint(uintptr_t addr)
 {
@@ -989,6 +1111,12 @@ JL_DLLEXPORT void jl_method_table_add_backedge(jl_methtable_t *mt, jl_value_t *t
 JL_DLLEXPORT void jl_mi_cache_insert(jl_method_instance_t *mi JL_ROOTING_ARGUMENT,
                                      jl_code_instance_t *ci JL_ROOTED_ARGUMENT JL_MAYBE_UNROOTED);
 JL_DLLEXPORT extern jl_value_t *(*const jl_rettype_inferred_addr)(jl_method_instance_t *mi JL_PROPAGATES_ROOT, size_t min_world, size_t max_world) JL_NOTSAFEPOINT;
+
+JL_DLLEXPORT void jl_force_trace_compile_timing_enable(void);
+JL_DLLEXPORT void jl_force_trace_compile_timing_disable(void);
+
+JL_DLLEXPORT void jl_force_trace_dispatch_enable(void);
+JL_DLLEXPORT void jl_force_trace_dispatch_disable(void);
 
 uint32_t jl_module_next_counter(jl_module_t *m) JL_NOTSAFEPOINT;
 jl_tupletype_t *arg_type_tuple(jl_value_t *arg1, jl_value_t **args, size_t nargs);
@@ -1159,8 +1287,8 @@ JL_DLLEXPORT jl_value_t *jl_get_backtrace(void);
 void jl_critical_error(int sig, int si_code, bt_context_t *context, jl_task_t *ct);
 JL_DLLEXPORT void jl_raise_debugger(void) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_gdblookup(void* ip) JL_NOTSAFEPOINT;
-void jl_print_native_codeloc(uintptr_t ip) JL_NOTSAFEPOINT;
-void jl_print_bt_entry_codeloc(jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
+void jl_print_native_codeloc(char *pre_str, uintptr_t ip) JL_NOTSAFEPOINT;
+void jl_print_bt_entry_codeloc(int sig, jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
 #ifdef _OS_WINDOWS_
 JL_DLLEXPORT void jl_refresh_dbg_module_list(void);
 #endif
@@ -1661,7 +1789,7 @@ JL_DLLEXPORT uint32_t jl_crc32c(uint32_t crc, const char *buf, size_t len);
 
 // -- exports from codegen -- //
 
-JL_DLLIMPORT jl_code_instance_t *jl_generate_fptr(jl_method_instance_t *mi JL_PROPAGATES_ROOT, size_t world);
+JL_DLLIMPORT jl_code_instance_t *jl_generate_fptr(jl_method_instance_t *mi JL_PROPAGATES_ROOT, size_t world, int *did_compile);
 JL_DLLIMPORT void jl_generate_fptr_for_unspecialized(jl_code_instance_t *unspec);
 JL_DLLIMPORT void jl_generate_fptr_for_oc_wrapper(jl_code_instance_t *unspec);
 JL_DLLIMPORT int jl_compile_extern_c(LLVMOrcThreadSafeModuleRef llvmmod, void *params, void *sysimg, jl_value_t *declrt, jl_value_t *sigt);
