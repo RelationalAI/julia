@@ -2200,6 +2200,9 @@ typedef int jl_uv_os_fd_t;
 #define JL_STDERR jl_uv_stderr
 #define JL_STDIN  jl_uv_stdin
 
+JL_DLLEXPORT jl_value_t *jl_compress_ir_traced(jl_method_t *m, jl_code_info_t *code, JL_STREAM *f);
+
+
 JL_DLLEXPORT int jl_process_events(void);
 
 JL_DLLEXPORT struct uv_loop_s *jl_global_event_loop(void) JL_NOTSAFEPOINT;

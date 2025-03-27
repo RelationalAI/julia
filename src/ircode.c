@@ -764,6 +764,130 @@ static jl_value_t *jl_decode_value(jl_ircode_state *s) JL_GC_DISABLED
 
 typedef jl_value_t jl_string_t; // for local expressibility
 
+JL_DLLEXPORT jl_string_t *jl_compress_ir_traced(jl_method_t *m, jl_code_info_t *code, JL_STREAM* f)
+{
+    JL_TIMING(AST_COMPRESS, AST_COMPRESS);
+    JL_LOCK(&m->writelock); // protect the roots array (Might GC)
+    assert(jl_is_method(m));
+    assert(jl_is_code_info(code));
+    ios_t dest;
+    ios_mem(&dest, 0);
+    int en = jl_gc_enable(0); // Might GC
+    size_t i;
+
+    if (m->roots == NULL) {
+        m->roots = jl_alloc_vec_any(0);
+        jl_gc_wb(m, m->roots);
+    }
+    jl_ircode_state s = {
+        &dest,
+        m,
+        jl_current_task->ptls,
+        1
+    };
+    jl_printf(f, "CODEINFO ");
+
+    size_t curr = 0;
+    jl_code_info_flags_t flags = code_info_flags(code->inferred, code->propagate_inbounds, code->has_fcall,
+                                                 code->nospecializeinfer, code->inlining, code->constprop);
+    write_uint8(s.s, flags.packed);
+    jl_printf(f, "flags: %li, ", ios_pos(s.s) - curr);
+    curr = ios_pos(s.s);
+
+    write_uint8(s.s, code->purity.bits);
+    jl_printf(f, "purity: %li, ", ios_pos(s.s) - curr);
+    curr = ios_pos(s.s);
+
+    write_uint16(s.s, code->inlining_cost);
+    jl_printf(f, "inlining_cost: %li, ", ios_pos(s.s) - curr);
+    curr = ios_pos(s.s);
+
+    size_t nslots = jl_array_len(code->slotflags);
+    assert(nslots >= m->nargs && nslots < INT32_MAX); // required by generated functions
+    write_int32(s.s, nslots);
+    ios_write(s.s, (char*)jl_array_data(code->slotflags), nslots);
+    jl_printf(f, "slotflags: %li, ", ios_pos(s.s) - curr);
+    curr = ios_pos(s.s);
+
+    // N.B.: The layout of everything before this point is explicitly referenced
+    // by the various jl_ir_ accessors. Make sure to adjust those if you change
+    // the data layout.
+    const char *names[] = {"code", "codelocs", "ssavaluetypes", "ssaflags", "method_for_inference_limit_heuristics", "linetable" };
+
+    for (i = 0; i < 6; i++) {
+        int copy = 1;
+        if (i == 1) { // skip codelocs
+            assert(jl_field_offset(jl_code_info_type, i) == offsetof(jl_code_info_t, codelocs));
+            continue;
+        }
+        if (i == 4) { // don't copy contents of method_for_inference_limit_heuristics field
+            assert(jl_field_offset(jl_code_info_type, i) == offsetof(jl_code_info_t, method_for_inference_limit_heuristics));
+            copy = 0;
+        }
+        jl_encode_value_(&s, jl_get_nth_field((jl_value_t*)code, i), copy);
+        jl_printf(f, "%s: %li, ", names[i], ios_pos(s.s) - curr);
+        curr = ios_pos(s.s);
+    }
+
+    // For opaque closure, also save the slottypes. We technically only need the first slot type,
+    // but this is simpler for now. We may want to refactor where this gets stored in the future.
+    if (m->is_for_opaque_closure) {
+        jl_encode_value_(&s, code->slottypes, 1);
+        jl_printf(f, "slottypes: %li, ", ios_pos(s.s) - curr);
+        curr = ios_pos(s.s);
+    }
+
+    if (m->generator)
+        // can't optimize generated functions
+        jl_encode_value_(&s, (jl_value_t*)jl_compress_argnames(code->slotnames), 1);
+    else
+        jl_encode_value(&s, jl_nothing);
+    jl_printf(f, "slotnames: %li, ", ios_pos(s.s) - curr);
+    curr = ios_pos(s.s);
+
+    size_t nstmt = jl_array_len(code->code);
+    assert(nstmt == jl_array_len(code->codelocs));
+    if (jl_array_len(code->linetable) < 256) {
+        for (i = 0; i < nstmt; i++) {
+            write_uint8(s.s, ((int32_t*)jl_array_data(code->codelocs))[i]);
+        }
+    }
+    else if (jl_array_len(code->linetable) < 65536) {
+        for (i = 0; i < nstmt; i++) {
+            write_uint16(s.s, ((int32_t*)jl_array_data(code->codelocs))[i]);
+        }
+    }
+    else {
+        ios_write(s.s, (char*)jl_array_data(code->codelocs), nstmt * sizeof(int32_t));
+    }
+    jl_printf(f, "codelocs: %li, ", ios_pos(s.s) - curr);
+    curr = ios_pos(s.s);
+
+    write_uint8(s.s, s.relocatability);
+    jl_printf(f, "relocatability: %li, ", ios_pos(s.s) - curr);
+    curr = ios_pos(s.s);
+
+    ios_flush(s.s);
+    jl_printf(f, "tot_size: %li, ", ios_pos(s.s));
+    ios_puts("m: ", f);
+    jl_static_show(f, m->module);
+    ios_puts(".", f);
+    jl_static_show(f, m); // NOTE: no newline
+
+    jl_string_t *v = jl_pchar_to_string(s.s->buf, s.s->size);
+    ios_close(s.s);
+    if (jl_array_len(m->roots) == 0) {
+        m->roots = NULL;
+    }
+    JL_GC_PUSH1(&v);
+    jl_gc_enable(en);
+    JL_UNLOCK(&m->writelock); // Might GC
+    JL_GC_POP();
+
+
+    return v;
+}
+
 JL_DLLEXPORT jl_string_t *jl_compress_ir(jl_method_t *m, jl_code_info_t *code)
 {
     JL_TIMING(AST_COMPRESS, AST_COMPRESS);
