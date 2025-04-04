@@ -2942,6 +2942,19 @@ JL_DLLEXPORT int jl_compile_hint(jl_tupletype_t *types)
     return 1;
 }
 
+// true if jl_get_compile_hint_specialization can find a method instance for us to try
+// to compile
+JL_DLLEXPORT int jl_has_compile_hint_specialization(jl_tupletype_t *types)
+{
+    size_t world = jl_atomic_load_acquire(&jl_world_counter);
+    size_t min_valid = 0;
+    size_t max_valid = ~(size_t)0;
+    jl_method_instance_t *mi = jl_get_compile_hint_specialization(types, world, &min_valid, &max_valid, 1);
+    if (mi == NULL)
+        return 0;
+    return 1;
+}
+
 // add type of `f` to front of argument tuple type
 jl_value_t *jl_argtype_with_function(jl_value_t *f, jl_value_t *types0)
 {

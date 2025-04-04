@@ -2048,7 +2048,6 @@ function _require_from_serialized(uuidkey::PkgId, path::String, ocachepath::Unio
 end
 
 
-
 # relative-path load
 
 """
@@ -3206,6 +3205,27 @@ macro __DIR__()
     __source__.file === nothing && return nothing
     _dirname = dirname(String(__source__.file::Symbol))
     return isempty(_dirname) ? pwd() : abspath(_dirname)
+end
+
+# TODO: mark `public`?
+# TODO: name? isprecompilable? has_precompilable_specialization? has_precompilable_method?
+# TODO: put here next to `precompile` or in `reflection.jl` next to `hasmethod`?
+"""
+    precompilable(f, argtypes::Tuple{Vararg{Any}})::Bool
+
+Check if we can find a method instance for the given function `f` for the argument tuple
+(of types) `argtypes` that we can try to compile, but do not compile it.
+
+If `false`, then `precompile(f, argtypes)` would return `false`.
+If `true`, then `precompile(f, argtypes)` would try to compile a method specialization (but
+may still return `false` if it does not succeed).
+"""
+function precompilable(@nospecialize(f), @nospecialize(argtypes::Tuple))
+    precompile(Tuple{Core.Typeof(f), argtypes...})
+end
+
+function precompilable(@nospecialize(argt::Type))
+    return ccall(:jl_has_compile_hint_specialization, Int32, (Any,), argt) != 0
 end
 
 """

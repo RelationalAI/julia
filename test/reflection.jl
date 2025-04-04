@@ -1057,3 +1057,17 @@ end
 @test !Base.ismutationfree(Vector{UInt64})
 
 @test Base.ismutationfree(Type{Union{}})
+
+module PrecompilableTest
+    foo(v::AbstractVector) = first(v) +1
+end
+@testset "precompilable" begin
+    @test !Base.precompilable(PrecompilableTest.foo, (AbstractVector,))
+    @test !Base.precompilable(PrecompilableTest.foo, (AbstractVector{Int},))
+    @test !Base.precompilable(PrecompilableTest.foo, (Vector,))
+    @test Base.precompilable(PrecompilableTest.foo, (Vector{Int},))
+    @test hasmethod(PrecompilableTest.foo, (AbstractVector,))
+    @test hasmethod(PrecompilableTest.foo, (AbstractVector{Int},))
+    @test hasmethod(PrecompilableTest.foo, (Vector,))
+    @test hasmethod(PrecompilableTest.foo, (Vector{Int},))
+end
