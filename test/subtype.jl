@@ -2597,3 +2597,139 @@ let S = Type{T53371{A, B, C, D, E}} where {A, B<:R53371{A}, C<:R53371{A}, D<:R53
     T = Type{T53371{A, B, C, D, E} where {A, B<:R53371{A}, C<:R53371{A}, D<:R53371{A}, E<:R53371{A}}}
     @test !(S <: T)
 end
+
+#issue 54356
+let S = Tuple{Val{Val{Union{Val{A2}, A2}}}, Val{Val{Union{Val{A2}, Val{A4}, A4}}}} where {A2, A4<:Union{Val{A2}, A2}},
+    T = Tuple{Vararg{Val{V}}} where {V}
+    @testintersect(S, T, !Union{})
+end
+
+#issue 54356
+abstract type A54356{T<:Real} end
+struct B54356{T} <: A54356{T} end
+struct C54356{S,T<:Union{S,Complex{S}}} end
+struct D54356{S<:Real,T} end
+let S = Tuple{Val, Val{T}} where {T}, R = Tuple{Val{Val{T}}, Val{T}} where {T},
+    SS = Tuple{Val, Val{T}, Val{T}} where {T}, RR = Tuple{Val{Val{T}}, Val{T}, Val{T}} where {T}
+    # parameters check for self
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, Complex{B}}}, S{1}, R{1})
+    # parameters check for supertype (B54356 -> A54356)
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, B54356{B}}}, S{1}, R{1})
+    # enure unused TypeVar skips the `UnionAll` wrapping
+    @testintersect(Tuple{Val{A}, A} where {B, A<:(Union{Val{B}, D54356{B,C}} where {C})}, S{1}, R{1})
+    # invariant parameter should not get narrowed
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, Val{Union{Int,Complex{B}}}}}, S{1}, R{1})
+    # bit value could not be `Union` element
+    @testintersect(Tuple{Val{A}, A, Val{B}} where {B, A<:Union{B, Val{B}}}, SS{1}, RR{1})
+    @testintersect(Tuple{Val{A}, A, Val{B}} where {B, A<:Union{B, Complex{B}}}, SS{1}, Union{})
+    # `check_datatype_parameters` should ignore bad `Union` elements in constraint's ub
+    T = Tuple{Val{Union{Val{Nothing}, Val{C54356{V,V}}}}, Val{Nothing}} where {Nothing<:V<:Nothing}
+    @test T <: S{Nothing}
+    @test T <: Tuple{Val{A}, A} where {B, C, A<:Union{Val{B}, Val{C54356{B,C}}}}
+    @test T <: typeintersect(Tuple{Val{A}, A} where {B, C, A<:Union{Val{B}, Val{C54356{B,C}}}}, S{Nothing})
+    # extra check for Vararg
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, NTuple{B,Any}}}, S{-1}, R{-1})
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, Tuple{Any,Vararg{Any,B}}}}, S{-1}, R{-1})
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, Tuple{Vararg{Int,Union{Int,Complex{B}}}}}}, S{1}, R{1})
+    # extra check for NamedTuple
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, NamedTuple{B,Tuple{Int}}}}, S{1}, R{1})
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, NamedTuple{B,Tuple{Int}}}}, S{(1,)}, R{(1,)})
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, NamedTuple{(:a),B}}}, S{NTuple{2,Int}}, R{NTuple{2,Int}})
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, NamedTuple{B,Tuple{Int,Int}}}}, S{(:a,:a)}, R{(:a,:a)})
+    # extra check for GenericMemory/GenericMemoryRef
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, GenericMemory{B}}}, S{1}, R{1})
+    @testintersect(Tuple{Val{A}, A} where {B, A<:Union{Val{B}, GenericMemory{:not_atomic,Int,B}}}, S{1}, R{1})
+end
+
+#issue 54516
+let S = Tuple{Val{<:T}, Union{Int,T}} where {T},
+    T = Tuple{Union{Int,T}, Val{<:T}} where {T}
+    @testintersect(S, T, !Union{})
+    @test !Base.has_free_typevars(typeintersect(S, T))
+end
+
+#issue 55230
+let T1 = NTuple{12, Union{Val{1}, Val{2}, Val{3}, Val{4}, Val{5}, Val{6}}}
+    T2 = Tuple{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}
+    @test T1 <: T2
+    T2 = Tuple{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Val}
+    @test T1 <: T2
+    T2 = Tuple{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Real}
+    @test !(T1 <: T2)
+    T2 = Tuple{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Union{Val,Real}}
+    @test T1 <: T2
+    T2 = Tuple{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Union{String,Real}}
+    @test !(T1 <: T2)
+    T2 = Tuple{<:Union{Val,Real},<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}
+    @test T1 <: T2
+    T2 = Tuple{<:Union{String,Real},<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,<:Any}
+    @test !(T1 <: T2)
+    @test Tuple{Union{Val{1},Val{2}}} <: Tuple{S} where {T, S<:Val{T}}
+end
+
+#issue 56040
+let S = Dict{V,V} where {V},
+    T = Dict{Ref{Union{Set{A2}, Set{A3}, A3}}, Ref{Union{Set{A3}, Set{A2}, Set{A1}, Set{A4}, A4}}} where {A1, A2<:Set{A1}, A3<:Union{Set{A1}, Set{A2}}, A4<:Union{Set{A2}, Set{A1}, Set{A3}}},
+    A = Dict{Ref{Set{Union{}}}, Ref{Set{Union{}}}}
+    @testintersect(S, T, !Union{})
+    @test A <: typeintersect(S, T)
+    @test A <: typeintersect(T, S)
+end
+
+#issue 56606
+let
+    A = Tuple{Val{1}}
+    B = Tuple{Val}
+    for _ in 1:30
+        A = Tuple{Val{A}}
+        B = Tuple{Val{<:B}}
+    end
+    @test A <: B
+end
+@testintersect(
+    Val{Tuple{Int,S,T}} where {S<:Any,T<:Vector{Vector{Int}}},
+    Val{Tuple{T,R,S}} where {T,R<:Vector{T},S<:Vector{R}},
+    Val{Tuple{Int, Vector{Int}, T}} where T<:Vector{Vector{Int}},
+)
+
+#issue 57429
+@testintersect(
+    Pair{<:Any, <:Tuple{Int}},
+    Pair{N, S} where {N, NTuple{N,Int}<:S<:NTuple{M,Int} where {M}},
+    !Union{}
+)
+@testintersect(
+    Pair{N, T} where {N,NTuple{N,Int}<:T<:NTuple{N,Int}},
+    Pair{N, T} where {N,NTuple{N,Int}<:T<:Tuple{Int,Vararg{Int}}},
+    !Union{}
+)
+
+#issue 57852
+@testintersect(
+    Tuple{Type{T}, Type{<:F}, Type{<:F}} where {T, F<:Union{String, T}},
+    Tuple{Type{Complex{T}} where T, Type{Complex{T}} where T, Type{String}},
+    Tuple{Type{Complex{T}}, Type{Complex{T}}, Type{String}} where T
+)
+@testintersect(
+    Tuple{Type{T}, Type{<:Union{F, Nothing}}, Type{<:Union{F, Nothing}}} where {T, F<:Union{String, T}},
+    Tuple{Type{Complex{T}} where T, Type{Complex{T}} where T, Type{String}},
+    Tuple{Type{Complex{T}}, Type{Complex{T}}, Type{String}} where T
+)
+
+#issue 58129
+for k in 1:500
+    @eval struct $(Symbol(:T58129, k)){T} end
+end
+let Tvar = TypeVar(:Tvar)
+    V = UnionAll(Tvar, Union{(@eval($(Symbol(:T58129, k)){$Tvar}) for k in 1:500)...})
+    @test Set{<:V} <: AbstractSet{<:V}
+end
+let Tvar1 = TypeVar(:Tvar1), Tvar2 = TypeVar(:Tvar2)
+    V1 = UnionAll(Tvar1, Union{(@eval($(Symbol(:T58129, k)){$Tvar1}) for k in 1:100)...})
+    V2 = UnionAll(Tvar2, Union{(@eval($(Symbol(:T58129, k)){$Tvar2}) for k in 1:100)...})
+    @test Set{<:V2} <: AbstractSet{<:V1}
+end
+
+#issue 58115
+@test Tuple{Tuple{Vararg{Tuple{Vararg{Tuple{Vararg{Tuple{Vararg{Tuple{Vararg{             Union{Tuple{}, Tuple{Tuple{}}}}}}}}}}}}}  , Tuple{}} <:
+      Tuple{Tuple{Vararg{Tuple{Vararg{Tuple{Vararg{Tuple{Vararg{Tuple{Vararg{Tuple{Vararg{Union{Tuple{}, Tuple{Tuple{}}}}}}}}}}}}}}}, Tuple{}}
