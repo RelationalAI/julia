@@ -9,6 +9,11 @@
 extern "C" {
 #endif
 
+JL_DLLEXPORT uint64_t jl_get_pg_size(void)
+{
+    return GC_PAGE_SZ;
+}
+
 // Try to allocate memory in chunks to permit faster allocation
 // and improve memory locality of the pools
 #ifdef _P64
@@ -19,6 +24,31 @@ extern "C" {
 #define MIN_BLOCK_PG_ALLOC (1) // 16 KB
 
 static int block_pg_cnt = DEFAULT_BLOCK_PG_ALLOC;
+static _Atomic(size_t) current_pg_count = 0;
+
+// Julia allocates large blocks (64M) with mmap. These are never
+// released back but the underlying physical memory may be released
+// with calls to madvise(MADV_DONTNEED).
+// These large blocks are used to allocated jl_page_size sized
+// pages, that are tracked by current_pg_count.
+static uint64_t poolmem_bytes_allocated = 0;
+static uint64_t poolmem_blocks_allocated_total = 0;
+
+
+JL_DLLEXPORT uint64_t jl_poolmem_blocks_allocated_total(void)
+{
+    return poolmem_blocks_allocated_total;
+}
+
+JL_DLLEXPORT uint64_t jl_poolmem_bytes_allocated(void)
+{
+    return poolmem_bytes_allocated;
+}
+
+JL_DLLEXPORT uint64_t jl_current_pg_count(void)
+{
+    return (uint64_t)jl_atomic_load(&current_pg_count);
+}
 
 void jl_gc_init_page(void)
 {
@@ -47,6 +77,12 @@ char *jl_gc_try_alloc_pages_(int pg_cnt) JL_NOTSAFEPOINT
                             MAP_NORESERVE | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED)
         return NULL;
+    poolmem_bytes_allocated += pages_sz;
+    poolmem_blocks_allocated_total++;
+
+#ifdef MADV_NOHUGEPAGE
+    madvise(mem, pages_sz, MADV_NOHUGEPAGE);
+#endif
 #endif
     if (GC_PAGE_SZ > jl_page_size)
         // round data pointer up to the nearest gc_page_data-aligned
@@ -98,7 +134,7 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
     jl_gc_pagemeta_t *meta = NULL;
 
     // try to get page from `pool_lazily_freed`
-    meta = pop_lf_page_metadata_back(&global_page_pool_lazily_freed);
+    meta = pop_lf_back(&global_page_pool_lazily_freed);
     if (meta != NULL) {
         gc_alloc_map_set(meta->data, GC_PAGE_ALLOCATED);
         // page is already mapped
@@ -106,14 +142,14 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
     }
 
     // try to get page from `pool_clean`
-    meta = pop_lf_page_metadata_back(&global_page_pool_clean);
+    meta = pop_lf_back(&global_page_pool_clean);
     if (meta != NULL) {
         gc_alloc_map_set(meta->data, GC_PAGE_ALLOCATED);
         goto exit;
     }
 
     // try to get page from `pool_freed`
-    meta = pop_lf_page_metadata_back(&global_page_pool_freed);
+    meta = pop_lf_back(&global_page_pool_freed);
     if (meta != NULL) {
         gc_alloc_map_set(meta->data, GC_PAGE_ALLOCATED);
         goto exit;
@@ -121,7 +157,7 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
 
     uv_mutex_lock(&gc_perm_lock);
     // another thread may have allocated a large block while we were waiting...
-    meta = pop_lf_page_metadata_back(&global_page_pool_clean);
+    meta = pop_lf_back(&global_page_pool_clean);
     if (meta != NULL) {
         uv_mutex_unlock(&gc_perm_lock);
         gc_alloc_map_set(meta->data, 1);
@@ -135,10 +171,10 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
         pg->data = data + GC_PAGE_SZ * i;
         gc_alloc_map_maybe_create(pg->data);
         if (i == 0) {
-            gc_alloc_map_set(pg->data, 1);
+            gc_alloc_map_set(pg->data, GC_PAGE_ALLOCATED);
         }
         else {
-            push_lf_page_metadata_back(&global_page_pool_clean, pg);
+            push_lf_back(&global_page_pool_clean, pg);
         }
     }
     uv_mutex_unlock(&gc_perm_lock);
@@ -148,6 +184,7 @@ exit:
     SetLastError(last_error);
 #endif
     errno = last_errno;
+    jl_atomic_fetch_add(&current_pg_count, 1);
     return meta;
 }
 
@@ -173,7 +210,7 @@ void jl_gc_free_page(jl_gc_pagemeta_t *pg) JL_NOTSAFEPOINT
     }
 #ifdef _OS_WINDOWS_
     VirtualFree(p, decommit_size, MEM_DECOMMIT);
-#elif defined(MADV_FREE)
+#elif 0
     static int supports_madv_free = 1;
     if (supports_madv_free) {
         if (madvise(p, decommit_size, MADV_FREE) == -1) {
@@ -188,6 +225,7 @@ void jl_gc_free_page(jl_gc_pagemeta_t *pg) JL_NOTSAFEPOINT
     madvise(p, decommit_size, MADV_DONTNEED);
 #endif
     msan_unpoison(p, decommit_size);
+    jl_atomic_fetch_add(&current_pg_count, -1);
 }
 
 #ifdef __cplusplus

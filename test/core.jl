@@ -23,6 +23,7 @@ for (T, c) in (
         (Core.TypeName, [:name, :module, :names, :atomicfields, :constfields, :wrapper, :mt, :hash, :n_uninitialized, :flags]),
         (DataType, [:name, :super, :parameters, :instance, :hash]),
         (TypeVar, [:name, :ub, :lb]),
+        (Task, [:metrics_enabled]),
     )
     @test Set((fieldname(T, i) for i in 1:fieldcount(T) if isconst(T, i))) == Set(c)
 end
@@ -32,12 +33,13 @@ for (T, c) in (
         (Core.CodeInfo, []),
         (Core.CodeInstance, [:next, :inferred, :purity_bits, :invoke, :specptr, :precompile]),
         (Core.Method, []),
-        (Core.MethodInstance, [:uninferred, :cache, :precompiled]),
+        (Core.MethodInstance, [:uninferred, :cache, :flags]),
         (Core.MethodTable, [:defs, :leafcache, :cache, :max_args]),
         (Core.TypeMapEntry, [:next]),
         (Core.TypeMapLevel, [:arg1, :targ, :name1, :tname, :list, :any]),
         (Core.TypeName, [:cache, :linearcache]),
         (DataType, [:types, :layout]),
+        (Task, [:_state, :running_time_ns, :finished_at, :first_enqueued_at, :last_started_running_at]),
     )
     @test Set((fieldname(T, i) for i in 1:fieldcount(T) if Base.isfieldatomic(T, i))) == Set(c)
 end
@@ -8083,3 +8085,8 @@ let widen_diagonal(x::UnionAll) = Base.rewrap_unionall(Base.widen_diagonal(Base.
     @test Tuple === widen_diagonal(Union{Tuple{Vararg{S}}, Tuple{Vararg{T}}} where {S, T})
     @test Tuple{Vararg{Val{<:Set}}} == widen_diagonal(Tuple{Vararg{T}} where T<:Val{<:Set})
 end
+
+#58434 bitsegal comparison of oddly sized fields
+primitive type ByteString58434 (18 * 8) end
+
+@test Base.datatype_haspadding(Tuple{ByteString58434}) == true

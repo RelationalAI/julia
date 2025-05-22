@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include "julia.h"
 #include "julia_internal.h"
+#include "gc.h"
 #include "threading.h"
 #include "julia_assert.h"
 
@@ -207,7 +208,7 @@ NOINLINE size_t rec_backtrace_ctx(jl_bt_element_t *bt_data, size_t maxsize,
 //
 // The first `skip` frames are omitted, in addition to omitting the frame from
 // `rec_backtrace` itself.
-NOINLINE size_t rec_backtrace(jl_bt_element_t *bt_data, size_t maxsize, int skip)
+NOINLINE size_t rec_backtrace(jl_bt_element_t *bt_data, size_t maxsize, int skip) JL_NOTSAFEPOINT
 {
     bt_context_t context;
     memset(&context, 0, sizeof(context));
@@ -221,6 +222,24 @@ NOINLINE size_t rec_backtrace(jl_bt_element_t *bt_data, size_t maxsize, int skip
     size_t bt_size = 0;
     jl_unw_stepn(&cursor, bt_data, &bt_size, NULL, maxsize, skip + 1, &pgcstack, 0);
     return bt_size;
+}
+
+NOINLINE int failed_to_sample_task_fun(jl_bt_element_t *bt_data, size_t maxsize, int skip) JL_NOTSAFEPOINT
+{
+    if (maxsize < 1) {
+        return 0;
+    }
+    bt_data[0].uintptr = (uintptr_t) &failed_to_sample_task_fun;
+    return 1;
+}
+
+NOINLINE int failed_to_stop_thread_fun(jl_bt_element_t *bt_data, size_t maxsize, int skip) JL_NOTSAFEPOINT
+{
+    if (maxsize < 1) {
+        return 0;
+    }
+    bt_data[0].uintptr = (uintptr_t) &failed_to_stop_thread_fun;
+    return 1;
 }
 
 static jl_value_t *array_ptr_void_type JL_ALWAYS_LEAFTYPE = NULL;
@@ -614,22 +633,25 @@ JL_DLLEXPORT jl_value_t *jl_lookup_code_address(void *ip, int skipC)
     return rs;
 }
 
-static void jl_safe_print_codeloc(const char* func_name, const char* file_name,
+static void jl_safe_print_codeloc(const char *pre_str,
+                                  const char* func_name, const char* file_name,
                                   int line, int inlined) JL_NOTSAFEPOINT
 {
     const char *inlined_str = inlined ? " [inlined]" : "";
     if (line != -1) {
-        jl_safe_printf("%s at %s:%d%s\n", func_name, file_name, line, inlined_str);
+        jl_safe_printf("%s%s at %s:%d%s\n",
+                       pre_str, func_name, file_name, line, inlined_str);
     }
     else {
-        jl_safe_printf("%s at %s (unknown line)%s\n", func_name, file_name, inlined_str);
+        jl_safe_printf("%s%s at %s (unknown line)%s\n",
+                       pre_str, func_name, file_name, inlined_str);
     }
 }
 
 // Print function, file and line containing native instruction pointer `ip` by
 // looking up debug info. Prints multiple such frames when `ip` points to
 // inlined code.
-void jl_print_native_codeloc(uintptr_t ip) JL_NOTSAFEPOINT
+void jl_print_native_codeloc(char *pre_str, uintptr_t ip) JL_NOTSAFEPOINT
 {
     // This function is not allowed to reference any TLS variables since
     // it can be called from an unmanaged thread on OSX.
@@ -641,10 +663,11 @@ void jl_print_native_codeloc(uintptr_t ip) JL_NOTSAFEPOINT
     for (i = 0; i < n; i++) {
         jl_frame_t frame = frames[i];
         if (!frame.func_name) {
-            jl_safe_printf("unknown function (ip: %p)\n", (void*)ip);
+            jl_safe_printf("%sunknown function (ip: %p)\n", pre_str, (void*)ip);
         }
         else {
-            jl_safe_print_codeloc(frame.func_name, frame.file_name, frame.line, frame.inlined);
+            jl_safe_print_codeloc(pre_str, frame.func_name,
+                                  frame.file_name, frame.line, frame.inlined);
             free(frame.func_name);
             free(frame.file_name);
         }
@@ -653,10 +676,20 @@ void jl_print_native_codeloc(uintptr_t ip) JL_NOTSAFEPOINT
 }
 
 // Print code location for backtrace buffer entry at *bt_entry
-void jl_print_bt_entry_codeloc(jl_bt_element_t *bt_entry) JL_NOTSAFEPOINT
+void jl_print_bt_entry_codeloc(int sig, jl_bt_element_t *bt_entry) JL_NOTSAFEPOINT
 {
+    char sig_str[32], pre_str[64];
+    sig_str[0] = pre_str[0] = '\0';
+    if (sig != -1) {
+        snprintf(sig_str, 32, "signal (%d) ", sig);
+    }
+    // do not call jl_threadid if there's no current task
+    if (jl_get_current_task()) {
+        snprintf(pre_str, 64, "%sthread (%d) ", sig_str, jl_threadid() + 1);
+    }
+
     if (jl_bt_is_native(bt_entry)) {
-        jl_print_native_codeloc(bt_entry[0].uintptr);
+        jl_print_native_codeloc(pre_str, bt_entry[0].uintptr);
     }
     else if (jl_bt_entry_tag(bt_entry) == JL_BT_INTERP_FRAME_TAG) {
         size_t ip = jl_bt_entry_header(bt_entry);
@@ -682,7 +715,7 @@ void jl_print_bt_entry_codeloc(jl_bt_element_t *bt_entry) JL_NOTSAFEPOINT
                     method = (jl_value_t*)((jl_method_t*)method)->name;
                 if (jl_is_symbol(method))
                     func_name = jl_symbol_name((jl_sym_t*)method);
-                jl_safe_print_codeloc(func_name, jl_symbol_name(locinfo->file),
+                jl_safe_print_codeloc(pre_str, func_name, jl_symbol_name(locinfo->file),
                                       locinfo->line, locinfo->inlined_at);
                 debuginfoloc = locinfo->inlined_at;
             }
@@ -856,24 +889,52 @@ _os_ptr_munge(uintptr_t ptr)
 
 extern bt_context_t *jl_to_bt_context(void *sigctx);
 
-static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
+JL_DLLEXPORT size_t jl_try_record_thread_backtrace(jl_ptls_t ptls2, jl_bt_element_t *bt_data, size_t max_bt_size) JL_NOTSAFEPOINT
 {
-    jl_task_t *ct = jl_current_task;
-    jl_ptls_t ptls = ct->ptls;
-    ptls->bt_size = 0;
+    int16_t tid = ptls2->tid;
+    jl_task_t *t = NULL;
+    bt_context_t *context = NULL;
+    bt_context_t c;
+    int lockret = jl_lock_stackwalk();
+    if (!jl_thread_suspend_and_get_state(tid, 0, &c)) {
+        jl_unlock_stackwalk(lockret);
+        return 0;
+    }
+    jl_unlock_stackwalk(lockret);
+    // thread is stopped, safe to read the task it was running before we stopped it
+    t = jl_atomic_load_relaxed(&ptls2->current_task);
+    context = &c;
+    size_t bt_size = rec_backtrace_ctx(bt_data, max_bt_size, context, ptls2->previous_task ? NULL : t->gcstack);
+    jl_thread_resume(tid);
+    return bt_size;
+}
+
+JL_DLLEXPORT jl_record_backtrace_result_t jl_record_backtrace(jl_task_t *t, jl_bt_element_t *bt_data, size_t max_bt_size, int all_tasks_profiler) JL_NOTSAFEPOINT
+{
+    int16_t tid = INT16_MAX;
+    jl_record_backtrace_result_t result = {0, tid};
+    jl_task_t *ct = NULL;
+    jl_ptls_t ptls = NULL;
+    if (!all_tasks_profiler) {
+        ct = jl_current_task;
+        ptls = ct->ptls;
+        ptls->bt_size = 0;
+        tid = ptls->tid;
+    }
     if (t == ct) {
-        ptls->bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE, 0);
-        return;
+        result.bt_size = rec_backtrace(bt_data, max_bt_size, 0);
+        result.tid = tid;
+        return result;
     }
     bt_context_t *context = NULL;
     bt_context_t c;
-    int16_t old = -1;
-    while (!jl_atomic_cmpswap(&t->tid, &old, ptls->tid) && old != ptls->tid) {
+    int16_t old;
+    for (old = -1; !jl_atomic_cmpswap(&t->tid, &old, tid) && old != tid; old = -1) {
         int lockret = jl_lock_stackwalk();
         // if this task is already running somewhere, we need to stop the thread it is running on and query its state
         if (!jl_thread_suspend_and_get_state(old, 0, &c)) {
             jl_unlock_stackwalk(lockret);
-            return;
+            return result;
         }
         jl_unlock_stackwalk(lockret);
         if (jl_atomic_load_relaxed(&t->tid) == old) {
@@ -1004,7 +1065,7 @@ static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
         mc->pc = mc->regs[30];
         context = &c;
       #else
-       #pragma message("jl_rec_backtrace not defined for ASM/SETJMP on unknown linux")
+       #pragma message("jl_record_backtrace not defined for ASM/SETJMP on unknown linux")
        (void)mc;
        (void)c;
        (void)mctx;
@@ -1066,7 +1127,7 @@ static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
         mc->__pad = 0; // aka __ra_sign_state = not signed
         context = &c;
       #else
-       #pragma message("jl_rec_backtrace not defined for ASM/SETJMP on unknown darwin")
+       #pragma message("jl_record_backtrace not defined for ASM/SETJMP on unknown darwin")
         (void)mctx;
         (void)c;
       #endif
@@ -1084,23 +1145,28 @@ static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
         mc->mc_r15 = ((long*)mctx)[7];
         context = &c;
      #else
-      #pragma message("jl_rec_backtrace not defined for ASM/SETJMP on unknown system")
+      #pragma message("jl_record_backtrace not defined for ASM/SETJMP on unknown system")
       (void)c;
      #endif
 #elif defined(JL_HAVE_ASYNCIFY)
-     #pragma message("jl_rec_backtrace not defined for ASYNCIFY")
+     #pragma message("jl_record_backtrace not defined for ASYNCIFY")
 #elif defined(JL_HAVE_SIGALTSTACK)
-     #pragma message("jl_rec_backtrace not defined for SIGALTSTACK")
+     #pragma message("jl_record_backtrace not defined for SIGALTSTACK")
 #else
-     #pragma message("jl_rec_backtrace not defined for unknown task system")
+     #pragma message("jl_record_backtrace not defined for unknown task system")
 #endif
     }
-    if (context)
-        ptls->bt_size = rec_backtrace_ctx(ptls->bt_data, JL_MAX_BT_SIZE, context,  t->gcstack);
+    size_t bt_size = 0;
+    if (context) {
+        bt_size = rec_backtrace_ctx(bt_data, max_bt_size, context, all_tasks_profiler ? NULL : t->gcstack);
+    }
     if (old == -1)
         jl_atomic_store_relaxed(&t->tid, old);
-    else if (old != ptls->tid)
+    else if (old != tid)
         jl_thread_resume(old);
+    result.bt_size = bt_size;
+    result.tid = old;
+    return result;
 }
 
 //--------------------------------------------------
@@ -1108,7 +1174,13 @@ static void jl_rec_backtrace(jl_task_t *t) JL_NOTSAFEPOINT
 
 JL_DLLEXPORT void jl_gdblookup(void* ip)
 {
-    jl_print_native_codeloc((uintptr_t)ip);
+    char pre_str[64];
+    pre_str[0] = '\0';
+    // do not call jl_threadid if there's no current task
+    if (jl_get_current_task()) {
+        snprintf(pre_str, 64, "thread (%d) ", jl_threadid() + 1);
+    }
+    jl_print_native_codeloc(pre_str, (uintptr_t)ip);
 }
 
 // Print backtrace for current exception in catch block
@@ -1123,7 +1195,7 @@ JL_DLLEXPORT void jlbacktrace(void) JL_NOTSAFEPOINT
     size_t i, bt_size = jl_excstack_bt_size(s, s->top);
     jl_bt_element_t *bt_data = jl_excstack_bt_data(s, s->top);
     for (i = 0; i < bt_size; i += jl_bt_entry_size(bt_data + i)) {
-        jl_print_bt_entry_codeloc(bt_data + i);
+        jl_print_bt_entry_codeloc(-1, bt_data + i);
     }
 }
 
@@ -1132,11 +1204,13 @@ JL_DLLEXPORT void jlbacktracet(jl_task_t *t) JL_NOTSAFEPOINT
 {
     jl_task_t *ct = jl_current_task;
     jl_ptls_t ptls = ct->ptls;
-    jl_rec_backtrace(t);
-    size_t i, bt_size = ptls->bt_size;
+    ptls->bt_size = 0;
     jl_bt_element_t *bt_data = ptls->bt_data;
+    jl_record_backtrace_result_t r = jl_record_backtrace(t, bt_data, JL_MAX_BT_SIZE, 0);
+    size_t bt_size = r.bt_size;
+    size_t i;
     for (i = 0; i < bt_size; i += jl_bt_entry_size(bt_data + i)) {
-        jl_print_bt_entry_codeloc(bt_data + i);
+        jl_print_bt_entry_codeloc(-1, bt_data + i);
     }
 }
 
@@ -1145,38 +1219,61 @@ JL_DLLEXPORT void jl_print_backtrace(void) JL_NOTSAFEPOINT
     jlbacktrace();
 }
 
-// Print backtraces for all live tasks, for all threads, to jl_safe_printf stderr
+extern int jl_inside_heartbeat_thread(void);
+extern int jl_heartbeat_pause(void);
+extern int jl_heartbeat_resume(void);
+
+// Print backtraces for all live tasks, for all threads, to jl_safe_printf
+// stderr. This can take a _long_ time!
 JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
 {
+    // disable heartbeats to prevent heartbeat loss while running this,
+    // unless this is called from the heartbeat thread itself; in that
+    // situation, the thread is busy running this and it will not be
+    // updating the missed heartbeats counter
+    if (!jl_inside_heartbeat_thread()) {
+        jl_heartbeat_pause();
+    }
+
     size_t nthreads = jl_atomic_load_acquire(&jl_n_threads);
     jl_ptls_t *allstates = jl_atomic_load_relaxed(&jl_all_tls_states);
+    int ctid = -1;
+    // do not call jl_threadid if there's no current task
+    if (jl_get_current_task()) {
+        ctid = jl_threadid() + 1;
+    }
+    jl_safe_printf("thread (%d) ++++ Task backtraces\n", ctid);
     for (size_t i = 0; i < nthreads; i++) {
+        // skip GC threads since they don't have tasks
+        if (gc_is_parallel_collector_thread(i) || gc_is_concurrent_collector_thread(i)) {
+            continue;
+        }
         jl_ptls_t ptls2 = allstates[i];
         if (ptls2 == NULL) {
             continue;
         }
-        small_arraylist_t *live_tasks = &ptls2->heap.live_tasks;
+        small_arraylist_t *live_tasks = &ptls2->gc_tls.heap.live_tasks;
         size_t n = mtarraylist_length(live_tasks);
         int t_state = JL_TASK_STATE_DONE;
         jl_task_t *t = ptls2->root_task;
         if (t != NULL)
             t_state = jl_atomic_load_relaxed(&t->_state);
-        jl_safe_printf("==== Thread %d created %zu live tasks\n",
-                ptls2->tid + 1, n + (t_state != JL_TASK_STATE_DONE));
+        jl_safe_printf("thread (%d) ==== Thread %d created %zu live tasks\n",
+                ctid, ptls2->tid + 1, n + (t_state != JL_TASK_STATE_DONE));
         if (show_done || t_state != JL_TASK_STATE_DONE) {
-            jl_safe_printf("     ---- Root task (%p)\n", ptls2->root_task);
+            jl_safe_printf("thread (%d)     ---- Root task (%p)\n", ctid, ptls2->root_task);
             if (t != NULL) {
-                jl_safe_printf("          (sticky: %d, started: %d, state: %d, tid: %d)\n",
-                        t->sticky, t->started, t_state,
+                jl_safe_printf("thread (%d)          (sticky: %d, started: %d, state: %d, tid: %d)\n",
+                        ctid, t->sticky, t->started, t_state,
                         jl_atomic_load_relaxed(&t->tid) + 1);
                 if (t->stkbuf != NULL) {
                     jlbacktracet(t);
                 }
                 else {
-                    jl_safe_printf("      no stack\n");
+                    jl_safe_printf("thread (%d)      no stack\n", ctid);
                 }
             }
-            jl_safe_printf("     ---- End root task\n");
+            jl_safe_printf("thread (%d)     ---- End root task\n", ctid);
         }
 
         for (size_t j = 0; j < n; j++) {
@@ -1186,20 +1283,24 @@ JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
             int t_state = jl_atomic_load_relaxed(&t->_state);
             if (!show_done && t_state == JL_TASK_STATE_DONE)
                 continue;
-            jl_safe_printf("     ---- Task %zu (%p)\n", j + 1, t);
+            jl_safe_printf("thread (%d)     ---- Task %zu (%p)\n", ctid, j + 1, t);
             // n.b. this information might not be consistent with the stack printing after it, since it could start running or change tid, etc.
-            jl_safe_printf("          (sticky: %d, started: %d, state: %d, tid: %d)\n",
-                    t->sticky, t->started, t_state,
+            jl_safe_printf("thread (%d)          (sticky: %d, started: %d, state: %d, tid: %d)\n",
+                    ctid, t->sticky, t->started, t_state,
                     jl_atomic_load_relaxed(&t->tid) + 1);
             if (t->stkbuf != NULL)
                 jlbacktracet(t);
             else
-                jl_safe_printf("      no stack\n");
-            jl_safe_printf("     ---- End task %zu\n", j + 1);
+                jl_safe_printf("thread (%d)      no stack\n", ctid);
+            jl_safe_printf("thread (%d)     ---- End task %zu\n", ctid, j + 1);
         }
-        jl_safe_printf("==== End thread %d\n", ptls2->tid + 1);
+        jl_safe_printf("thread (%d) ==== End thread %d\n", ctid, ptls2->tid + 1);
     }
-    jl_safe_printf("==== Done\n");
+    jl_safe_printf("thread (%d) ++++ Done\n", ctid);
+
+    if (!jl_inside_heartbeat_thread()) {
+        jl_heartbeat_resume();
+    }
 }
 
 #ifdef __cplusplus
