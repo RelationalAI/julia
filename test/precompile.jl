@@ -1812,7 +1812,6 @@ precompile_test_harness("Issue #50538") do load_path
     @test !isdefined(I50538, :undefglobal)
 end
 
-
 empty!(Base.DEPOT_PATH)
 append!(Base.DEPOT_PATH, original_depot_path)
 empty!(Base.LOAD_PATH)
