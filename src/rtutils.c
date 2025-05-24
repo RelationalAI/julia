@@ -1022,7 +1022,7 @@ static size_t jl_static_show_x_(JL_STREAM *out, jl_value_t *v, jl_datatype_t *vt
 #endif
     }
     else if (vt == jl_float16_type) {
-        n += jl_static_show_float(out, julia_half_to_float(*(uint16_t *)v), vt);
+        n += jl_static_show_float(out, julia__gnu_h2f_ieee(*(uint16_t *)v), vt);
     }
     else if (vt == jl_float32_type) {
         n += jl_static_show_float(out, *(float *)v, vt);
