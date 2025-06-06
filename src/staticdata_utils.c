@@ -158,7 +158,8 @@ static int has_backedge_to_worklist(jl_method_instance_t *mi, htable_t *visited,
     if (jl_is_method(mod))
         mod = ((jl_method_t*)mod)->module;
     assert(jl_is_module(mod));
-    if (mi->precompiled || !jl_object_in_image((jl_value_t*)mod) || type_in_worklist(mi->specTypes)) {
+    uint8_t is_precompiled = jl_atomic_load_relaxed(&mi->flags) & JL_MI_FLAGS_MASK_PRECOMPILED;
+    if (is_precompiled || !jl_object_in_image((jl_value_t*)mod) || type_in_worklist(mi->specTypes)) {
         return 1;
     }
     if (!mi->backedges) {
@@ -816,17 +817,31 @@ static void jl_insert_methods(jl_array_t *list)
     }
 }
 
-static void jl_copy_roots(jl_array_t *method_roots_list, uint64_t key)
+static int jl_copy_roots(jl_array_t *method_roots_list, uint64_t key)
 {
     size_t i, l = jl_array_len(method_roots_list);
+    int failed = 0;
     for (i = 0; i < l; i+=2) {
         jl_method_t *m = (jl_method_t*)jl_array_ptr_ref(method_roots_list, i);
         jl_array_t *roots = (jl_array_t*)jl_array_ptr_ref(method_roots_list, i+1);
         if (roots) {
             assert(jl_is_array(roots));
+            if (m->root_blocks) {
+                // check for key collision
+                uint64_t *blocks = (uint64_t*)jl_array_data(m->root_blocks);
+                size_t nx2 = jl_array_nrows(m->root_blocks);
+                for (size_t i = 0; i < nx2; i+=2) {
+                    if (blocks[i] == key) {
+                        // found duplicate block
+                        failed = -1;
+                    }
+                }
+            }
+
             jl_append_method_roots(m, key, roots);
         }
     }
+    return failed;
 }
 
 
@@ -839,6 +854,10 @@ static jl_array_t *jl_verify_edges(jl_array_t *targets, size_t minworld)
     if (ulong_array == NULL)
         ulong_array = jl_apply_array_type((jl_value_t*)jl_ulong_type, 1);
     jl_array_t *maxvalids = jl_alloc_array_1d(ulong_array, l);
+    if (minworld == jl_base_module->primary_world) {
+        memset(jl_array_data(maxvalids), -1, l * sizeof(size_t));
+        return maxvalids;
+    }
     memset(jl_array_data(maxvalids), 0, l * sizeof(size_t));
     jl_value_t *loctag = NULL;
     jl_value_t *matches = NULL;
