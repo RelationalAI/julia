@@ -24,7 +24,8 @@ JL_DLLEXPORT jl_module_t *jl_new_module_(jl_sym_t *name, jl_module_t *parent, ui
     m->istopmod = 0;
     m->uuid = uuid_zero;
     static unsigned int mcounter; // simple counter backup, in case hrtime is not incrementing
-    m->build_id.lo = jl_hrtime() + (++mcounter);
+    // TODO: this is used for ir decompression and is liable to hash collisions so use more of the bits
+    m->build_id.lo = bitmix(jl_hrtime() + (++mcounter), jl_rand());
     if (!m->build_id.lo)
         m->build_id.lo++; // build id 0 is invalid
     m->build_id.hi = ~(uint64_t)0;
@@ -702,13 +703,15 @@ JL_DLLEXPORT int jl_binding_resolved_p(jl_module_t *m, jl_sym_t *var)
 
 static uint_t bindingkey_hash(size_t idx, jl_svec_t *data)
 {
-    jl_binding_t *b = (jl_binding_t*)jl_svecref(data, idx);
+    jl_binding_t *b = (jl_binding_t*)jl_svecref(data, idx); // This must always happen inside the lock
     jl_sym_t *var = b->globalref->name;
     return var->hash;
 }
 
 static int bindingkey_eq(size_t idx, const void *var, jl_svec_t *data, uint_t hv)
 {
+    if (idx >= jl_svec_len(data))
+        return 0; // We got a OOB access, probably due to a data race
     jl_binding_t *b = (jl_binding_t*)jl_svecref(data, idx);
     jl_sym_t *name = b->globalref->name;
     return var == name;

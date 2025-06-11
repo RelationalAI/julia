@@ -67,6 +67,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         1,    // can_inline
                         JL_OPTIONS_POLLY_ON, // polly
                         NULL, // trace_compile
+                        NULL, // trace_dispatch
                         JL_OPTIONS_FAST_MATH_DEFAULT,
                         0,    // worker
                         NULL, // cookie
@@ -90,6 +91,10 @@ JL_DLLEXPORT void jl_init_options(void)
                         0, // strip-ir
                         0, // permalloc_pkgimg
                         0, // heap-size-hint
+                        0, // trace_compile_timing
+                        NULL, // safe_crash_log_file
+                        0, // task_metrics
+                        25, // timeout_for_safepoint_straggler_s
     };
     jl_options_initialized = 1;
 }
@@ -203,16 +208,24 @@ static const char opts_hidden[]  =
     " --strip-metadata         Remove docstrings and source location info from system image\n"
     " --strip-ir               Remove IR (intermediate representation) of compiled functions\n\n"
 
-    // compiler debugging (see the devdocs for tips on using these options)
-    " --output-unopt-bc <name> Generate unoptimized LLVM bitcode (.bc)\n"
-    " --output-bc <name>       Generate LLVM bitcode (.bc)\n"
-    " --output-asm <name>      Generate an assembly file (.s)\n"
-    " --output-incremental={yes|no*}\n"
-    "                          Generate an incremental output file (rather than complete)\n"
-    " --trace-compile={stderr,name}\n"
-    "                          Print precompile statements for methods compiled during execution or save to a path\n"
-    " --image-codegen          Force generate code in imaging mode\n"
-    " --permalloc-pkgimg={yes|no*} Copy the data section of package images into memory\n"
+    // compiler debugging and experimental (see the devdocs for tips on using these options)
+    " --experimental                                Enable the use of experimental (alpha) features\n"
+    " --output-unopt-bc <name>                      Generate unoptimized LLVM bitcode (.bc)\n"
+    " --output-bc <name>                            Generate LLVM bitcode (.bc)\n"
+    " --output-asm <name>                           Generate an assembly file (.s)\n"
+    " --output-incremental={yes|no*}                Generate an incremental output file (rather than\n"
+    "                                               complete)\n"
+    " --timeout-for-safepoint-straggler <seconds>   If this value is set, then we will dump the backtrace for a thread\n"
+    "                                               that fails to reach a safepoint within the specified time\n"
+    " --trace-compile={stderr|name}                 Print precompile statements for methods compiled\n"
+    "                                               during execution or save to stderr or a path. Methods that\n"
+    "                                               were recompiled are printed in yellow or with a trailing\n"
+    "                                               comment if color is not supported\n"
+    " --trace-compile-timing                        If --trace-compile is enabled show how long each took to\n"
+    "                                               compile in ms\n"
+    " --task-metrics={yes|no*}                      Enable collection of per-task timing data.\n"
+    " --image-codegen                               Force generate code in imaging mode\n"
+    " --permalloc-pkgimg={yes|no*}                  Copy the data section of package images into memory\n"
 ;
 
 JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
@@ -232,7 +245,11 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_warn_scope,
            opt_inline,
            opt_polly,
+           opt_timeout_for_safepoint_straggler,
            opt_trace_compile,
+           opt_trace_compile_timing,
+           opt_trace_dispatch,
+           opt_task_metrics,
            opt_math_mode,
            opt_worker,
            opt_bind_to,
@@ -258,7 +275,8 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_strip_ir,
            opt_heap_size_hint,
            opt_gc_threads,
-           opt_permalloc_pkgimg
+           opt_permalloc_pkgimg,
+           opt_safe_crash_log_file,
     };
     static const char* const shortopts = "+vhqH:e:E:L:J:C:it:p:O:g:";
     static const struct option longopts[] = {
@@ -307,7 +325,11 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "warn-scope",      required_argument, 0, opt_warn_scope },
         { "inline",          required_argument, 0, opt_inline },
         { "polly",           required_argument, 0, opt_polly },
+        { "timeout-for-safepoint-straggler", required_argument, 0, opt_timeout_for_safepoint_straggler },
         { "trace-compile",   required_argument, 0, opt_trace_compile },
+        { "trace-compile-timing",  no_argument, 0, opt_trace_compile_timing },
+        { "trace-dispatch",  required_argument, 0, opt_trace_dispatch },
+        { "task-metrics",    required_argument, 0, opt_task_metrics },
         { "math-mode",       required_argument, 0, opt_math_mode },
         { "handle-signals",  required_argument, 0, opt_handle_signals },
         // hidden command line options
@@ -320,6 +342,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "strip-ir",        no_argument,       0, opt_strip_ir },
         { "permalloc-pkgimg",required_argument, 0, opt_permalloc_pkgimg },
         { "heap-size-hint",  required_argument, 0, opt_heap_size_hint },
+        { "safe-crash-log-file",   required_argument, 0, opt_safe_crash_log_file },
         { 0, 0, 0, 0 }
     };
 
@@ -735,7 +758,7 @@ restart_switch:
                 jl_errorf("julia: invalid argument to --inline (%s)", optarg);
             }
             break;
-       case opt_polly:
+        case opt_polly:
             if (!strcmp(optarg,"yes"))
                 jl_options.polly = JL_OPTIONS_POLLY_ON;
             else if (!strcmp(optarg,"no"))
@@ -744,9 +767,17 @@ restart_switch:
                 jl_errorf("julia: invalid argument to --polly (%s)", optarg);
             }
             break;
-         case opt_trace_compile:
+        case opt_trace_compile:
             jl_options.trace_compile = strdup(optarg);
             if (!jl_options.trace_compile)
+                jl_errorf("fatal error: failed to allocate memory: %s", strerror(errno));
+            break;
+        case opt_trace_compile_timing:
+            jl_options.trace_compile_timing = 1;
+            break;
+        case opt_trace_dispatch:
+            jl_options.trace_dispatch = strdup(optarg);
+            if (!jl_options.trace_dispatch)
                 jl_errorf("fatal error: failed to allocate memory: %s", strerror(errno));
             break;
         case opt_math_mode:
@@ -849,6 +880,26 @@ restart_switch:
                 jl_options.permalloc_pkgimg = 0;
             else
                 jl_errorf("julia: invalid argument to --permalloc-pkgimg={yes|no} (%s)", optarg);
+            break;
+        case opt_safe_crash_log_file:
+            jl_options.safe_crash_log_file = strdup(optarg);
+            if (jl_options.safe_crash_log_file == NULL)
+                jl_error("julia: failed to allocate memory for --safe-crash-log-file");
+            break;
+        case opt_timeout_for_safepoint_straggler:
+            errno = 0;
+            long timeout = strtol(optarg, &endptr, 10);
+            if (errno != 0 || optarg == endptr || timeout < 1 || timeout > INT16_MAX)
+                jl_errorf("julia: --timeout-for-safepoint-straggler=<seconds>; seconds must be an integer between 1 and %d", INT16_MAX);
+            jl_options.timeout_for_safepoint_straggler_s = (int16_t)timeout;
+            break;
+        case opt_task_metrics:
+            if (!strcmp(optarg, "no"))
+                jl_options.task_metrics = JL_OPTIONS_TASK_METRICS_OFF;
+            else if (!strcmp(optarg, "yes"))
+                jl_options.task_metrics = JL_OPTIONS_TASK_METRICS_ON;
+            else
+                jl_errorf("julia: invalid argument to --task-metrics={yes|no} (%s)", optarg);
             break;
         default:
             jl_errorf("julia: unhandled option -- %c\n"
