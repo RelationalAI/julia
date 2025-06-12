@@ -156,6 +156,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         0, // task_metrics
                         -1, // timeout_for_safepoint_straggler_s
                         NULL, // safe_crash_log_file
+                        0, // gc_sweep_always_full
     };
     jl_options_initialized = 1;
 }
@@ -333,6 +334,18 @@ static const char opts_hidden[]  =
     "                                               and can throw errors. With unsafe-warn warnings will be\n"
     "                                               printed for dynamic call sites that might lead to such\n"
     "                                               errors. In safe mode compile-time errors are given instead.\n"
+    " --hard-heap-limit=<size>[<unit>]              Set a hard limit on the heap size: if we ever\n"
+    "                                               go above this limit, we will abort. The value\n"
+    "                                               may be specified as a number of bytes,\n"
+    "                                               optionally in units of: B, K (kibibytes),\n"
+    "                                               M (mebibytes), G (gibibytes) or T (tebibytes).\n"
+    " --heap-target-increment=<size>[<unit>]        Set an upper bound on how much the heap\n"
+    "                                               target can increase between consecutive\n"
+    "                                               collections. The value may be specified as\n"
+    "                                               a number of bytes, optionally in units of:\n"
+    "                                               B, K (kibibytes), M (mebibytes), G (gibibytes)\n"
+    "                                               or T (tebibytes).\n"
+    " --gc-sweep-always-full                        Makes the GC always do a full sweep of the heap\n"
 ;
 
 JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
@@ -381,6 +394,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_strip_metadata,
            opt_strip_ir,
            opt_heap_size_hint,
+           opt_gc_sweep_always_full,
            opt_gc_threads,
            opt_permalloc_pkgimg,
            opt_trim,
@@ -453,6 +467,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "strip-ir",        no_argument,       0, opt_strip_ir },
         { "permalloc-pkgimg",required_argument, 0, opt_permalloc_pkgimg },
         { "heap-size-hint",  required_argument, 0, opt_heap_size_hint },
+        { "gc-sweep-always-full", no_argument, 0, opt_gc_sweep_always_full },
         { "trim",  optional_argument, 0, opt_trim },
         { "safe-crash-log-file",   required_argument, 0, opt_safe_crash_log_file },
         { 0, 0, 0, 0 }
@@ -994,6 +1009,9 @@ restart_switch:
             if (errno != 0 || optarg == endptr || timeout < 1 || timeout > INT16_MAX)
                 jl_errorf("julia: --timeout-for-safepoint-straggler=<seconds>; seconds must be an integer between 1 and %d", INT16_MAX);
             jl_options.timeout_for_safepoint_straggler_s = (int16_t)timeout;
+            break;
+        case opt_gc_sweep_always_full:
+            jl_options.gc_sweep_always_full = 1;
             break;
         case opt_trim:
             if (optarg == NULL || !strcmp(optarg,"safe"))
