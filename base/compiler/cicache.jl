@@ -56,6 +56,8 @@ function get(wvc::WorldView{InternalCodeCache}, mi::MethodInstance, default)
     r = ccall(:jl_rettype_inferred, Any, (Any, UInt, UInt), mi, first(wvc.worlds), last(wvc.worlds))
     if r === nothing
         return default
+    elseif !isa(r, CodeInstance)
+        println("Expected CodeInstance for ", mi)
     end
     return r::CodeInstance
 end
