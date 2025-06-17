@@ -2426,7 +2426,10 @@ static void record_precompile_statement(jl_method_instance_t *mi, double compila
             jl_printf(s_precompile, "#= %6.1f =# ", compilation_time / 1e6);
         jl_printf(s_precompile, "precompile(");
         jl_static_show(s_precompile, mi->specTypes);
-        jl_printf(s_precompile, ")\n");
+        if (is_const_return_abi)
+            jl_printf(s_precompile, ") #= const-return =#\n");
+        else
+            jl_printf(s_precompile, ")\n");
         if (s_precompile != JL_STDERR)
             ios_flush(&f_precompile);
     }
