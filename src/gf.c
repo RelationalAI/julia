@@ -523,6 +523,7 @@ JL_DLLEXPORT void jl_mi_cache_insert(jl_method_instance_t *mi JL_ROOTING_ARGUMEN
                                      jl_code_instance_t *ci JL_ROOTED_ARGUMENT JL_MAYBE_UNROOTED)
 {
     JL_GC_PUSH1(&ci);
+    assert(jl_is_code_instance(ci));
     if (jl_is_method(mi->def.method))
         JL_LOCK(&mi->def.method->writelock);
     jl_code_instance_t *oldci = jl_atomic_load_relaxed(&mi->cache);
