@@ -98,8 +98,7 @@ struct _jl_taggedvalue_bits {
     // Bit to indicate whether a call to `jl_array_to_string` is in-flight
     // Mostly used to implement a poor-man's dynamic race detector.
     // See usage in `jl_array_to_string`.
-#define ARRAY_TO_STRING_IN_FLIGHT_BIT_OFFSET (3)
-    uintptr_t array_to_string_in_flight:1;
+    uintptr_t obj_whose_gc_was_delayed:1;
 #ifdef _P64
     uintptr_t tag:60;
 #else
