@@ -182,7 +182,7 @@ static int precompile_enq_specialization_(jl_method_instance_t *mi, void *closur
     jl_code_instance_t *codeinst = jl_atomic_load_relaxed(&mi->cache);
     while (codeinst) {
         if (jl_atomic_load_relaxed(&codeinst->invoke) != jl_fptr_const_return) {
-            if (jl_atomic_load_relaxed(&codeinst->invoke) != NULL) {
+            if (jl_atomic_load_relaxed(&codeinst->invoke) != NULL || jl_atomic_load_relaxed(&codeinst->precompile)) {
                 jl_array_ptr_1d_push((jl_array_t*)closure, (jl_value_t*)mi);
                 return 1;
             }
