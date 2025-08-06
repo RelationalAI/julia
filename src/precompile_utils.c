@@ -181,11 +181,22 @@ static int precompile_enq_specialization_(jl_method_instance_t *mi, void *closur
     assert(jl_is_method_instance(mi));
     jl_code_instance_t *codeinst = jl_atomic_load_relaxed(&mi->cache);
     while (codeinst) {
+        int do_compile = 0;
         if (jl_atomic_load_relaxed(&codeinst->invoke) != jl_fptr_const_return) {
-            if (jl_atomic_load_relaxed(&codeinst->invoke) != NULL || jl_atomic_load_relaxed(&codeinst->precompile)) {
-                jl_array_ptr_1d_push((jl_array_t*)closure, (jl_value_t*)mi);
-                return 1;
+            jl_value_t *inferred = jl_atomic_load_relaxed(&codeinst->inferred);
+            if (inferred &&
+                inferred != jl_nothing &&
+                jl_ir_flag_inferred(inferred) &&
+                (jl_ir_inlining_cost(inferred) == UINT16_MAX)) {
+                do_compile = 1;
             }
+            else if (jl_atomic_load_relaxed(&codeinst->invoke) != NULL || jl_atomic_load_relaxed(&codeinst->precompile)) {
+                do_compile = 1;
+            }
+        }
+        if (do_compile) {
+            jl_array_ptr_1d_push((jl_array_t*)closure, (jl_value_t*)mi);
+            return 1;
         }
         codeinst = jl_atomic_load_relaxed(&codeinst->next);
     }
