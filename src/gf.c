@@ -2403,6 +2403,12 @@ static void record_precompile_statement(jl_method_instance_t *mi, double compila
     if (!jl_is_method(def))
         return;
 
+    // nested layer of this precompile statement
+    int nested_level = 0;
+    if (jl_atomic_load_relaxed(&(jl_codegen_lock.owner)) == jl_current_task){
+        nested_level = jl_codegen_lock.count;
+    }
+
     JL_LOCK(&precomp_statement_out_lock);
     if (s_precompile == NULL) {
         const char *t = jl_options.trace_compile;
@@ -2417,7 +2423,7 @@ static void record_precompile_statement(jl_method_instance_t *mi, double compila
     }
     if (!jl_has_free_typevars(mi->specTypes)) {
         if (force_trace_compile || jl_options.trace_compile_timing)
-            jl_printf(s_precompile, "#= %6.1f =# ", compilation_time / 1e6);
+            jl_printf(s_precompile, "#= %6.1f;nested:%d; =# ", compilation_time / 1e6, nested_level);
         jl_printf(s_precompile, "precompile(");
         jl_static_show(s_precompile, mi->specTypes);
         jl_printf(s_precompile, ")\n");
