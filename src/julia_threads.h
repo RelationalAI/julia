@@ -4,7 +4,7 @@
 #ifndef JL_THREADS_H
 #define JL_THREADS_H
 
-#include "work-stealing-queue.h"
+#include "gc-tls.h"
 #include "julia_atomics.h"
 #ifndef _OS_WINDOWS_
 #include "pthread.h"
@@ -122,83 +122,7 @@ typedef struct {
     uint32_t count;
 } jl_mutex_t;
 
-typedef struct {
-    jl_taggedvalue_t *freelist;   // root of list of free objects
-    jl_taggedvalue_t *newpages;   // root of list of chunks of free objects
-    uint16_t osize;      // size of objects in this pool
-} jl_gc_pool_t;
-
-typedef struct {
-    _Atomic(int64_t) allocd;
-    _Atomic(int64_t) freed;
-    _Atomic(uint64_t) malloc;
-    _Atomic(uint64_t) realloc;
-    _Atomic(uint64_t) poolalloc;
-    _Atomic(uint64_t) bigalloc;
-    _Atomic(uint64_t) freecall;
-} jl_thread_gc_num_t;
-
-typedef struct {
-    // variable for tracking weak references
-    small_arraylist_t weak_refs;
-    // live tasks started on this thread
-    // that are holding onto a stack from the pool
-    small_arraylist_t live_tasks;
-
-    // variables for tracking malloc'd arrays
-    struct _mallocarray_t *mallocarrays;
-    struct _mallocarray_t *mafreelist;
-
-    // variables for tracking big objects
-    struct _bigval_t *big_objects;
-
-    // variables for tracking "remembered set"
-    arraylist_t _remset[2]; // contains jl_value_t*
-    // lower bound of the number of pointers inside remembered values
-    int remset_nptr;
-    arraylist_t *remset;
-    arraylist_t *last_remset;
-
-    // variables for allocating objects from pools
-#ifdef _P64
-#  define JL_GC_N_POOLS 49
-#elif MAX_ALIGN == 8
-#  define JL_GC_N_POOLS 50
-#else
-#  define JL_GC_N_POOLS 51
-#endif
-    jl_gc_pool_t norm_pools[JL_GC_N_POOLS];
-
-#define JL_N_STACK_POOLS 16
-    small_arraylist_t free_stacks[JL_N_STACK_POOLS];
-} jl_thread_heap_t;
-
-typedef struct {
-    ws_queue_t chunk_queue;
-    ws_queue_t ptr_queue;
-    arraylist_t reclaim_set;
-} jl_gc_markqueue_t;
-
-typedef struct {
-    // thread local increment of `perm_scanned_bytes`
-    size_t perm_scanned_bytes;
-    // thread local increment of `scanned_bytes`
-    size_t scanned_bytes;
-    // Number of queued big objects (<= 1024)
-    size_t nbig_obj;
-    // Array of queued big objects to be moved between the young list
-    // and the old list.
-    // A set low bit means that the object should be moved from the old list
-    // to the young list (`mark_reset_age`).
-    // Objects can only be put into this list when the mark bit is flipped to
-    // `1` (atomically). Combining with the sync after marking,
-    // this makes sure that a single objects can only appear once in
-    // the lists (the mark bit cannot be flipped to `0` without sweeping)
-    void *big_obj[1024];
-} jl_gc_mark_cache_t;
-
 struct _jl_bt_element_t;
-struct _jl_gc_pagemeta_t;
 
 // This includes all the thread local states we care about for a thread.
 // Changes to TLS field types must be reflected in codegen.
@@ -216,6 +140,10 @@ typedef struct _jl_tls_states_t {
 #define JL_GC_STATE_SAFE 2
     // gc_state = 2 means the thread is running unmanaged code that can be
     //              execute at the same time with the GC.
+#define JL_GC_PARALLEL_COLLECTOR_THREAD 3
+    // gc_state = 3 means the thread is a parallel collector thread (i.e. never runs Julia code)
+#define JL_GC_CONCURRENT_COLLECTOR_THREAD 4
+    // gc_state = 4 means the thread is a concurrent collector thread (background sweeper thread that never runs Julia code)
     _Atomic(int8_t) gc_state; // read from foreign threads
     // execution of certain certain impure
     // statements is prohibited from certain
@@ -226,8 +154,8 @@ typedef struct _jl_tls_states_t {
     int8_t disable_gc;
     // Counter to disable finalizer **on the current thread**
     int finalizers_inhibited;
-    jl_thread_heap_t heap; // this is very large, and the offset is baked into codegen
-    jl_thread_gc_num_t gc_num;
+    jl_gc_tls_states_t gc_tls; // this is very large, and the offset of the first member is baked into codegen
+    small_arraylist_t lazily_freed_mtarraylist_buffers;
     volatile sig_atomic_t defer_signal;
     _Atomic(struct _jl_task_t*) current_task;
     struct _jl_task_t *next_task;
@@ -261,11 +189,6 @@ typedef struct _jl_tls_states_t {
 #endif
     jl_thread_t system_id;
     arraylist_t finalizers;
-    struct _jl_gc_pagemeta_t *page_metadata_allocd;
-    struct _jl_gc_pagemeta_t *page_metadata_lazily_freed;
-    jl_gc_markqueue_t mark_queue;
-    jl_gc_mark_cache_t gc_cache;
-    arraylist_t sweep_objs;
     // Saved exception for previous *external* API call or NULL if cleared.
     // Access via jl_exception_occurred().
     struct _jl_value_t *previous_exception;
@@ -344,6 +267,8 @@ void jl_sigint_safepoint(jl_ptls_t tls);
 STATIC_INLINE int8_t jl_gc_state_set(jl_ptls_t ptls, int8_t state,
                                      int8_t old_state)
 {
+    assert(old_state != JL_GC_PARALLEL_COLLECTOR_THREAD);
+    assert(old_state != JL_GC_CONCURRENT_COLLECTOR_THREAD);
     jl_atomic_store_release(&ptls->gc_state, state);
     // A safe point is required if we transition from GC-safe region to
     // non GC-safe region.

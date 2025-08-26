@@ -16,7 +16,8 @@ let lk = ReentrantLock()
     t2 = @async (notify(c2); trylock(lk))
     wait(c1)
     wait(c2)
-    @test t1.queue === lk.cond_wait.waitq
+    # wait for the task to park in the queue (it may be spinning)
+    @test timedwait(() -> t1.queue === lk.cond_wait.waitq, 1.0) == :ok
     @test t2.queue !== lk.cond_wait.waitq
     @test istaskdone(t2)
     @test !fetch(t2)
@@ -326,4 +327,10 @@ end
     @test_throws ArgumentError @macroexpand(@threads 1 2) # wrong number of args
     @test_throws ArgumentError @macroexpand(@threads 1) # arg isn't an Expr
     @test_throws ArgumentError @macroexpand(@threads if true 1 end) # arg doesn't start with for
+end
+
+@testset "num_stack_mappings metric" begin
+    @test @ccall(jl_get_num_stack_mappings()::Cint) >= 1
+    # There must be at least two: one for the root test task and one for the async task:
+    @test fetch(@async(@ccall(jl_get_num_stack_mappings()::Cint))) >= 2
 end

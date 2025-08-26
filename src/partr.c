@@ -108,22 +108,30 @@ void jl_init_threadinginfra(void)
 
 void JL_NORETURN jl_finish_task(jl_task_t *t);
 
-
 static inline int may_mark(void) JL_NOTSAFEPOINT
 {
     return (jl_atomic_load(&gc_n_threads_marking) > 0);
 }
 
-// gc thread mark function
-void jl_gc_mark_threadfun(void *arg)
+static inline int may_sweep(jl_ptls_t ptls) JL_NOTSAFEPOINT
+{
+    return (jl_atomic_load(&ptls->gc_tls.gc_sweeps_requested) > 0);
+}
+
+// parallel gc thread function
+void jl_parallel_gc_threadfun(void *arg)
 {
     jl_threadarg_t *targ = (jl_threadarg_t*)arg;
 
     // initialize this thread (set tid and create heap)
     jl_ptls_t ptls = jl_init_threadtls(targ->tid);
-
+    void *stack_lo, *stack_hi;
+    jl_init_stack_limits(0, &stack_lo, &stack_hi);
+    // warning: this changes `jl_current_task`, so be careful not to call that from this function
+    jl_task_t *ct = jl_init_root_task(ptls, stack_lo, stack_hi);
+    JL_GC_PROMISE_ROOTED(ct);
     // wait for all threads
-    jl_gc_state_set(ptls, JL_GC_STATE_WAITING, 0);
+    jl_gc_state_set(ptls, JL_GC_PARALLEL_COLLECTOR_THREAD, 0);
     uv_barrier_wait(targ->barrier);
 
     // free the thread argument here
@@ -131,39 +139,43 @@ void jl_gc_mark_threadfun(void *arg)
 
     while (1) {
         uv_mutex_lock(&gc_threads_lock);
-        while (!may_mark()) {
+        while (!may_mark() && !may_sweep(ptls)) {
             uv_cond_wait(&gc_threads_cond, &gc_threads_lock);
         }
         uv_mutex_unlock(&gc_threads_lock);
+        assert(jl_atomic_load_relaxed(&ptls->gc_state) == JL_GC_PARALLEL_COLLECTOR_THREAD);
         gc_mark_loop_parallel(ptls, 0);
+        if (may_sweep(ptls)) {
+            assert(jl_atomic_load_relaxed(&ptls->gc_state) == JL_GC_PARALLEL_COLLECTOR_THREAD);
+            gc_sweep_pool_parallel(ptls);
+            jl_atomic_fetch_add(&ptls->gc_tls.gc_sweeps_requested, -1);
+        }
     }
 }
 
-// gc thread sweep function
-void jl_gc_sweep_threadfun(void *arg)
+// concurrent gc thread function
+void jl_concurrent_gc_threadfun(void *arg)
 {
     jl_threadarg_t *targ = (jl_threadarg_t*)arg;
 
     // initialize this thread (set tid and create heap)
     jl_ptls_t ptls = jl_init_threadtls(targ->tid);
-
+    void *stack_lo, *stack_hi;
+    jl_init_stack_limits(0, &stack_lo, &stack_hi);
+    // warning: this changes `jl_current_task`, so be careful not to call that from this function
+    jl_task_t *ct = jl_init_root_task(ptls, stack_lo, stack_hi);
+    JL_GC_PROMISE_ROOTED(ct);
     // wait for all threads
-    jl_gc_state_set(ptls, JL_GC_STATE_WAITING, 0);
+    jl_gc_state_set(ptls, JL_GC_CONCURRENT_COLLECTOR_THREAD, 0);
     uv_barrier_wait(targ->barrier);
 
     // free the thread argument here
     free(targ);
 
     while (1) {
+        assert(jl_atomic_load_relaxed(&ptls->gc_state) == JL_GC_CONCURRENT_COLLECTOR_THREAD);
         uv_sem_wait(&gc_sweep_assists_needed);
-        while (1) {
-            jl_gc_pagemeta_t *pg = pop_lf_page_metadata_back(&global_page_pool_lazily_freed);
-            if (pg == NULL) {
-                break;
-            }
-            jl_gc_free_page(pg);
-            push_lf_page_metadata_back(&global_page_pool_freed, pg);
-        }
+        gc_free_pages();
     }
 }
 

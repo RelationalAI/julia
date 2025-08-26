@@ -15,6 +15,7 @@
 #include "errno.h"
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #endif
 
 #include "julia.h"
@@ -677,6 +678,84 @@ JL_DLLEXPORT int jl_printf(uv_stream_t *s, const char *format, ...)
     return c;
 }
 
+STATIC_INLINE int copystp(char *dest, const char *src)
+{
+    char *d = stpcpy(dest, src);
+    return (int)(d - dest);
+}
+
+// RAI-specific
+STATIC_INLINE void write_to_safe_crash_log(char *buf) JL_NOTSAFEPOINT
+{
+    int buflen = strlen(buf);
+    // Our telemetry on SPCS expects a JSON object per line.
+    // We ignore write failures because there is nothing we can do.
+    // We'll use a 2K byte buffer: 69 bytes for JSON message decorations,
+    // 1 byte for the terminating NUL character, and 3 bytes for an
+    // ellipsis if we have to truncate the message leaves `max_b` bytes
+    // for the message.
+    const int wbuflen = 2048;
+    const int max_b = wbuflen - 70 - 3;
+    char wbuf[wbuflen];
+    bzero(wbuf, wbuflen);
+    int wlen = 0;
+
+    // JSON preamble (32 bytes)
+    wlen += copystp(&wbuf[wlen], "\n{\"level\":\"Error\", \"timestamp\":\"");
+
+    // Timestamp (19 bytes)
+    struct timeval tv;
+    struct tm* tm_info;
+    gettimeofday(&tv, NULL);
+    tm_info = gmtime(&tv.tv_sec);
+    wlen += strftime(&wbuf[wlen], 42, "%Y-%m-%dT%H:%M:%S", tm_info);
+    sprintf(&wbuf[wlen], ".%03ld", (long)tv.tv_usec / 1000);
+    wlen += 4;
+
+    // JSON preamble to message (15 bytes)
+    wlen += copystp(&wbuf[wlen], "\", \"message\": \"");
+
+    // Message
+    // Each iteration will advance wlen by 1 or 2
+    for (size_t i = 0; i < buflen; i++) {
+        // Truncate the message if the write buffer is full
+        if (wlen == max_b || wlen == max_b - 1) {
+            wlen += copystp(&wbuf[wlen], "...");
+            break;
+        }
+        switch (buf[i]) {
+            case '"':
+                wlen += copystp(&wbuf[wlen], "\\\"");
+                break;
+            case '\b':
+                wlen += copystp(&wbuf[wlen], "\\b");
+                break;
+            case '\n':
+                wlen += copystp(&wbuf[wlen], "\\n");
+                break;
+            case '\r':
+                wlen += copystp(&wbuf[wlen], "\\r");
+                break;
+            case '\t':
+                wlen += copystp(&wbuf[wlen], "\\t");
+                break;
+            case '\\':
+                wlen += copystp(&wbuf[wlen], "\\\\");
+                break;
+            default:
+                wbuf[wlen++] = buf[i];
+                break;
+        }
+    }
+    // JSON completion (3 bytes)
+    wlen += copystp(&wbuf[wlen], "\"}\n");
+    write(jl_sig_fd, wbuf, wlen);
+    fdatasync(jl_sig_fd);
+}
+
+extern int jl_inside_heartbeat_thread(void);
+extern int jl_inside_waiting_for_the_world(void);
+
 JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
 {
     static char buf[1000];
@@ -693,6 +772,12 @@ JL_DLLEXPORT void jl_safe_printf(const char *fmt, ...)
     va_end(args);
 
     buf[999] = '\0';
+    // order is important here: we want to ensure that the threading infra
+    // has been initialized before we start trying to print to the
+    // safe crash log file
+    if (jl_sig_fd != 0 && (jl_inside_signal_handler() || jl_inside_heartbeat_thread() || jl_inside_waiting_for_the_world())) {
+        write_to_safe_crash_log(buf);
+    }
     if (write(STDERR_FILENO, buf, strlen(buf)) < 0) {
         // nothing we can do; ignore the failure
     }

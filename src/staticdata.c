@@ -1482,7 +1482,7 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
             else if (jl_is_method_instance(v)) {
                 assert(f == s->s);
                 jl_method_instance_t *newmi = (jl_method_instance_t*)&f->buf[reloc_offset];
-                jl_atomic_store_relaxed(&newmi->precompiled, 0);
+                jl_atomic_store_relaxed(&newmi->flags, 0);
             }
             else if (jl_is_code_instance(v)) {
                 assert(f == s->s);
@@ -2204,8 +2204,19 @@ static jl_value_t *strip_codeinfo_meta(jl_method_t *m, jl_value_t *ci_, int orig
             jl_array_ptr_set(ci->slotnames, i, questionsym);
     }
     if (orig) {
-        m->slot_syms = jl_compress_argnames(ci->slotnames);
+        jl_array_t *slotnames = jl_uncompress_argnames(m->slot_syms);
+        JL_GC_PUSH1(&slotnames);
+        int tostrip = jl_array_len(slotnames);
+        if (jl_tparam0(jl_unwrap_unionall(m->sig)) == jl_typeof(jl_kwcall_func))
+            tostrip = m->nargs;
+        for (i = 0; i < tostrip; i++) {
+            jl_value_t *s = jl_array_ptr_ref(slotnames, i);
+            if (s != (jl_value_t*)jl_unused_sym)
+                jl_array_ptr_set(ci->slotnames, i, questionsym);
+        }
+        m->slot_syms = jl_compress_argnames(slotnames);
         jl_gc_wb(m, m->slot_syms);
+        JL_GC_POP();
     }
     jl_value_t *ret = (jl_value_t*)ci;
     if (compressed)
@@ -2952,7 +2963,6 @@ static void jl_restore_system_image_from_stream_(ios_t *f, jl_image_t *image, jl
         jl_set_gs_ctr(gs_ctr);
     }
     else {
-        jl_atomic_fetch_add(&jl_world_counter, 1);
         offset_restored = jl_read_offset(&s);
         offset_init_order = jl_read_offset(&s);
         offset_extext_methods = jl_read_offset(&s);
@@ -3182,7 +3192,6 @@ static void jl_restore_system_image_from_stream_(ios_t *f, jl_image_t *image, jl
         jl_cache_type_((jl_datatype_t*)obj);
     }
     // Perform fixups: things like updating world ages, inserting methods & specializations, etc.
-    size_t world = jl_atomic_load_acquire(&jl_world_counter);
     for (size_t i = 0; i < s.uniquing_objs.len; i++) {
         uintptr_t item = (uintptr_t)s.uniquing_objs.items[i];
         // check whether this is a gvar index
@@ -3236,6 +3245,16 @@ static void jl_restore_system_image_from_stream_(ios_t *f, jl_image_t *image, jl
         o->bits.in_image = 1;
     }
     arraylist_free(&cleanup_list);
+    size_t world = jl_atomic_load_relaxed(&jl_world_counter);
+    for (size_t i = 0; i < s.fixup_objs.len; i++) {
+        // decide if we need to allocate a world
+        uintptr_t item = (uintptr_t)s.fixup_objs.items[i];
+        jl_value_t *obj = (jl_value_t*)(image_base + item);
+        if (jl_is_method(obj)) {
+            world = jl_atomic_fetch_add(&jl_world_counter, 1) + 1;
+            break;
+        }
+    }
     for (size_t i = 0; i < s.fixup_objs.len; i++) {
         uintptr_t item = (uintptr_t)s.fixup_objs.items[i];
         jl_value_t *obj = (jl_value_t*)(image_base + item);
@@ -3439,11 +3458,15 @@ static jl_value_t *jl_restore_package_image_from_stream(void* pkgimage_handle, i
             jl_restore_system_image_from_stream_(f, image, depmods, checksum, (jl_array_t**)&restored, &init_order, &extext_methods, &new_specializations, &method_roots_list, &ext_targets, &edges, &base, &ccallable_list, &cachesizes);
             JL_SIGATOMIC_END();
 
-            // Insert method extensions
-            jl_insert_methods(extext_methods);
             // No special processing of `new_specializations` is required because recaching handled it
             // Add roots to methods
-            jl_copy_roots(method_roots_list, jl_worklist_key((jl_array_t*)restored));
+            int failed = jl_copy_roots(method_roots_list, jl_worklist_key((jl_array_t*)restored));
+            if (failed != 0) {
+                jl_printf(JL_STDERR, "Error copying roots to methods from Module: %s\n", pkgname);
+                abort();
+            }
+            // Insert method extensions
+            jl_insert_methods(extext_methods);
             // Handle edges
             size_t world = jl_atomic_load_acquire(&jl_world_counter);
             jl_insert_backedges((jl_array_t*)edges, (jl_array_t*)ext_targets, (jl_array_t*)new_specializations, world); // restore external backedges (needs to be last)

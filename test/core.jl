@@ -23,6 +23,7 @@ for (T, c) in (
         (Core.TypeName, [:name, :module, :names, :atomicfields, :constfields, :wrapper, :mt, :hash, :n_uninitialized, :flags]),
         (DataType, [:name, :super, :parameters, :instance, :hash]),
         (TypeVar, [:name, :ub, :lb]),
+        (Task, [:metrics_enabled]),
     )
     @test Set((fieldname(T, i) for i in 1:fieldcount(T) if isconst(T, i))) == Set(c)
 end
@@ -32,12 +33,13 @@ for (T, c) in (
         (Core.CodeInfo, []),
         (Core.CodeInstance, [:next, :inferred, :purity_bits, :invoke, :specptr, :precompile]),
         (Core.Method, []),
-        (Core.MethodInstance, [:uninferred, :cache, :precompiled]),
+        (Core.MethodInstance, [:uninferred, :cache, :flags]),
         (Core.MethodTable, [:defs, :leafcache, :cache, :max_args]),
         (Core.TypeMapEntry, [:next]),
         (Core.TypeMapLevel, [:arg1, :targ, :name1, :tname, :list, :any]),
         (Core.TypeName, [:cache, :linearcache]),
         (DataType, [:types, :layout]),
+        (Task, [:_state, :running_time_ns, :finished_at, :first_enqueued_at, :last_started_running_at]),
     )
     @test Set((fieldname(T, i) for i in 1:fieldcount(T) if Base.isfieldatomic(T, i))) == Set(c)
 end
@@ -231,6 +233,62 @@ k11840(::Type{Union{Tuple{Int32}, Tuple{Int64}}}) = '2'
 @test k11840(Tuple{Union{Int32, Int64}}) == '2'
 @test k11840(Union{Tuple{Int32}, Tuple{Int64}}) == '2'
 
+# issue #59327
+@noinline f59327(f, x) = Any[f, x]
+g59327(x) = f59327(+, Any[x][1])
+g59327(1)
+@test any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(f59327), Function, Int},
+    methods(f59327)[1].specializations)
+
+@noinline h59327(f::Union{Function, Nothing}, x) = Any[f, x]
+i59327(x) = h59327(+, Any[x][1])
+i59327(1)
+@test any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(h59327), Function, Int},
+    methods(h59327)[1].specializations)
+
+@noinline j59327(f::Function, x) = Any[f, x]
+k59327(x) = j59327(+, Any[x][1])
+k59327(1)
+@test any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(j59327), Function, Int},
+    methods(j59327)[1].specializations
+)
+
+@noinline l59327(f::Base.Callable, x) = Any[f, x]
+m59327(x) = l59327(+, Any[x][1])
+m59327(1)
+@test any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(l59327), Function, Int},
+    methods(l59327)[1].specializations
+)
+
+# _do_ specialize if the signature has a `where`
+@noinline n59327(f::F, x) where F = Any[f, x]
+o59327(x) = n59327(+, Any[x][1])
+o59327(1)
+@test !any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(n59327), Function, Int},
+    methods(n59327)[1].specializations
+)
+@test any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(n59327), typeof(+), Int},
+    methods(n59327)[1].specializations
+)
+
+# _do_ specialize if the signature is specific
+@noinline n59327(f::typeof(+), x) = Any[f, x]
+o59327(x) = n59327(+, Any[x][1])
+o59327(1)
+@test !any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(n59327), Function, Int},
+    methods(n59327)[1].specializations
+)
+@test any(
+    mi->mi isa Core.MethodInstance && mi.specTypes == Tuple{typeof(n59327), typeof(+), Int},
+    methods(n59327)[1].specializations
+)
 
 # issue #20511
 f20511(x::DataType) = 0
@@ -8083,3 +8141,8 @@ let widen_diagonal(x::UnionAll) = Base.rewrap_unionall(Base.widen_diagonal(Base.
     @test Tuple === widen_diagonal(Union{Tuple{Vararg{S}}, Tuple{Vararg{T}}} where {S, T})
     @test Tuple{Vararg{Val{<:Set}}} == widen_diagonal(Tuple{Vararg{T}} where T<:Val{<:Set})
 end
+
+#58434 bitsegal comparison of oddly sized fields
+primitive type ByteString58434 (18 * 8) end
+
+@test Base.datatype_haspadding(Tuple{ByteString58434}) == true

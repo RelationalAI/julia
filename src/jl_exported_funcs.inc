@@ -152,10 +152,6 @@
     XX(jl_gc_add_ptr_finalizer) \
     XX(jl_gc_add_quiescent) \
     XX(jl_gc_allocobj) \
-    XX(jl_gc_alloc_0w) \
-    XX(jl_gc_alloc_1w) \
-    XX(jl_gc_alloc_2w) \
-    XX(jl_gc_alloc_3w) \
     XX(jl_gc_alloc_typed) \
     XX(jl_gc_big_alloc) \
     XX(jl_gc_collect) \
@@ -175,6 +171,7 @@
     XX(jl_gc_internal_obj_base_ptr) \
     XX(jl_gc_is_enabled) \
     XX(jl_gc_is_in_finalizer) \
+    XX(jl_gc_pool_live_bytes) \
     XX(jl_gc_live_bytes) \
     XX(jl_gc_managed_malloc) \
     XX(jl_gc_managed_realloc) \
@@ -289,6 +286,7 @@
     XX(jl_istopmod) \
     XX(jl_is_binding_deprecated) \
     XX(jl_is_char_signed) \
+    XX(jl_is_compilable) \
     XX(jl_is_const) \
     XX(jl_is_debugbuild) \
     XX(jl_is_foreign_type) \

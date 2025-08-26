@@ -12,7 +12,7 @@ const nmeta = 4 # number of metadata fields per block (threadid, taskid, cpu_cyc
 # deprecated functions: use `getdict` instead
 lookup(ip::UInt) = lookup(convert(Ptr{Cvoid}, ip))
 
-export @profile
+export @profile, @profile_walltime
 
 """
     @profile
@@ -24,6 +24,28 @@ macro profile(ex)
     return quote
         try
             start_timer()
+            $(esc(ex))
+        finally
+            stop_timer()
+        end
+    end
+end
+
+"""
+    @profile_walltime
+
+`@profile_walltime <expression>` runs your expression while taking periodic backtraces of a sample of all live tasks (both running and not running).
+These are appended to an internal buffer of backtraces.
+
+It can be configured via `Profile.init`, same as the `Profile.@profile`, and that you can't use `@profile` simultaneously with `@profile_walltime`.
+
+As mentioned above, since this tool sample not only running tasks, but also sleeping tasks and tasks performing IO,
+it can be used to diagnose performance issues such as lock contention, IO bottlenecks, and other issues that are not visible in the CPU profile.
+"""
+macro profile_walltime(ex)
+    return quote
+        try
+            start_timer(true)
             $(esc(ex))
         finally
             stop_timer()
@@ -369,9 +391,10 @@ end
 
 function has_meta(data)
     for i in 6:length(data)
-        data[i] == 0 || continue            # first block end null
-        data[i - 1] == 0 || continue        # second block end null
-        data[i - META_OFFSET_SLEEPSTATE] in 1:2 || continue
+        data[i] == 0 || continue                            # first block end null
+        data[i - 1] == 0 || continue                        # second block end null
+        data[i - META_OFFSET_SLEEPSTATE] in 1:3 || continue # 1 for not sleeping, 2 for sleeping, 3 for task profiler fake state
+                                                            # See definition in `src/julia_internal.h`
         data[i - META_OFFSET_CPUCYCLECLOCK] != 0 || continue
         data[i - META_OFFSET_TASKID] != 0 || continue
         data[i - META_OFFSET_THREADID] != 0 || continue
@@ -562,9 +585,9 @@ Julia, and examine the resulting `*.mem` files.
 clear_malloc_data() = ccall(:jl_clear_malloc_data, Cvoid, ())
 
 # C wrappers
-function start_timer()
+function start_timer(all_tasks::Bool=false)
     check_init() # if the profile buffer hasn't been initialized, initialize with default size
-    status = ccall(:jl_profile_start_timer, Cint, ())
+    status = ccall(:jl_profile_start_timer, Cint, (Bool,), all_tasks)
     if status < 0
         error(error_codes[status])
     end
@@ -676,12 +699,16 @@ function parse_flat(::Type{T}, data::Vector{UInt64}, lidict::Union{LineInfoDict,
     startframe = length(data)
     skip = false
     nsleeping = 0
+    is_task_profile = false
     for i in startframe:-1:1
         (startframe - 1) >= i >= (startframe - (nmeta + 1)) && continue # skip metadata (its read ahead below) and extra block end NULL IP
         ip = data[i]
         if is_block_end(data, i)
             # read metadata
-            thread_sleeping = data[i - META_OFFSET_SLEEPSTATE] - 1 # subtract 1 as state is incremented to avoid being equal to 0
+            thread_sleeping_state = data[i - META_OFFSET_SLEEPSTATE] - 1 # subtract 1 as state is incremented to avoid being equal to 0
+            if thread_sleeping_state == 2
+                is_task_profile = true
+            end
             # cpu_cycle_clock = data[i - META_OFFSET_CPUCYCLECLOCK]
             taskid = data[i - META_OFFSET_TASKID]
             threadid = data[i - META_OFFSET_THREADID]
@@ -689,7 +716,7 @@ function parse_flat(::Type{T}, data::Vector{UInt64}, lidict::Union{LineInfoDict,
                 skip = true
                 continue
             end
-            if thread_sleeping == 1
+            if thread_sleeping_state == 1
                 nsleeping += 1
             end
             skip = false
@@ -723,12 +750,12 @@ function parse_flat(::Type{T}, data::Vector{UInt64}, lidict::Union{LineInfoDict,
         end
     end
     @assert length(lilist) == length(n) == length(m) == length(lilist_idx)
-    return (lilist, n, m, totalshots, nsleeping)
+    return (lilist, n, m, totalshots, nsleeping, is_task_profile)
 end
 
 function flat(io::IO, data::Vector{UInt64}, lidict::Union{LineInfoDict, LineInfoFlatDict}, cols::Int, fmt::ProfileFormat,
                 threads::Union{Int,AbstractVector{Int}}, tasks::Union{UInt,AbstractVector{UInt}}, is_subsection::Bool)
-    lilist, n, m, totalshots, nsleeping = parse_flat(fmt.combine ? StackFrame : UInt64, data, lidict, fmt.C, threads, tasks)
+    lilist, n, m, totalshots, nsleeping, is_task_profile = parse_flat(fmt.combine ? StackFrame : UInt64, data, lidict, fmt.C, threads, tasks)
     if false # optional: drop the "non-interpretable" ones
         keep = map(frame -> frame != UNKNOWN && frame.line != 0, lilist)
         lilist = lilist[keep]
@@ -748,11 +775,15 @@ function flat(io::IO, data::Vector{UInt64}, lidict::Union{LineInfoDict, LineInfo
         return true
     end
     is_subsection || print_flat(io, lilist, n, m, cols, filenamemap, fmt)
-    Base.print(io, "Total snapshots: ", totalshots, ". Utilization: ", round(Int, util_perc), "%")
+    if is_task_profile
+        Base.print(io, "Total snapshots: ", totalshots, "\n")
+    else
+        Base.print(io, "Total snapshots: ", totalshots, ". Utilization: ", round(Int, util_perc), "%")
+    end
     if is_subsection
         println(io)
         print_flat(io, lilist, n, m, cols, filenamemap, fmt)
-    else
+    elseif !is_task_profile
         Base.print(io, " across all threads and tasks. Use the `groupby` kwarg to break down by thread and/or task.\n")
     end
     return false
@@ -927,12 +958,16 @@ function tree!(root::StackFrameTree{T}, all::Vector{UInt64}, lidict::Union{LineI
     startframe = length(all)
     skip = false
     nsleeping = 0
+    is_task_profile = false
     for i in startframe:-1:1
         (startframe - 1) >= i >= (startframe - (nmeta + 1)) && continue # skip metadata (it's read ahead below) and extra block end NULL IP
         ip = all[i]
         if is_block_end(all, i)
             # read metadata
-            thread_sleeping = all[i - META_OFFSET_SLEEPSTATE] - 1 # subtract 1 as state is incremented to avoid being equal to 0
+            thread_sleeping_state = all[i - META_OFFSET_SLEEPSTATE] - 1 # subtract 1 as state is incremented to avoid being equal to 0
+            if thread_sleeping_state == 2
+                is_task_profile = true
+            end
             # cpu_cycle_clock = all[i - META_OFFSET_CPUCYCLECLOCK]
             taskid = all[i - META_OFFSET_TASKID]
             threadid = all[i - META_OFFSET_THREADID]
@@ -941,7 +976,7 @@ function tree!(root::StackFrameTree{T}, all::Vector{UInt64}, lidict::Union{LineI
                 skip = true
                 continue
             end
-            if thread_sleeping == 1
+            if thread_sleeping_state == 1
                 nsleeping += 1
             end
             skip = false
@@ -1047,7 +1082,7 @@ function tree!(root::StackFrameTree{T}, all::Vector{UInt64}, lidict::Union{LineI
         nothing
     end
     cleanup!(root)
-    return root, nsleeping
+    return root, nsleeping, is_task_profile
 end
 
 function maxstats(root::StackFrameTree)
@@ -1116,9 +1151,9 @@ end
 function tree(io::IO, data::Vector{UInt64}, lidict::Union{LineInfoFlatDict, LineInfoDict}, cols::Int, fmt::ProfileFormat,
                 threads::Union{Int,AbstractVector{Int}}, tasks::Union{UInt,AbstractVector{UInt}}, is_subsection::Bool)
     if fmt.combine
-        root, nsleeping = tree!(StackFrameTree{StackFrame}(), data, lidict, fmt.C, fmt.recur, threads, tasks)
+        root, nsleeping, is_task_profile = tree!(StackFrameTree{StackFrame}(), data, lidict, fmt.C, fmt.recur, threads, tasks)
     else
-        root, nsleeping = tree!(StackFrameTree{UInt64}(), data, lidict, fmt.C, fmt.recur, threads, tasks)
+        root, nsleeping, is_task_profile = tree!(StackFrameTree{UInt64}(), data, lidict, fmt.C, fmt.recur, threads, tasks)
     end
     util_perc = (1 - (nsleeping / root.count)) * 100
     is_subsection || print_tree(io, root, cols, fmt, is_subsection)
@@ -1132,11 +1167,15 @@ function tree(io::IO, data::Vector{UInt64}, lidict::Union{LineInfoFlatDict, Line
         end
         return true
     end
-    Base.print(io, "Total snapshots: ", root.count, ". Utilization: ", round(Int, util_perc), "%")
+    if is_task_profile
+        Base.print(io, "Total snapshots: ", root.count, "\n")
+    else
+        Base.print(io, "Total snapshots: ", root.count, ". Utilization: ", round(Int, util_perc), "%")
+    end
     if is_subsection
         Base.println(io)
         print_tree(io, root, cols, fmt, is_subsection)
-    else
+    elseif !is_task_profile
         Base.print(io, " across all threads and tasks. Use the `groupby` kwarg to break down by thread and/or task.\n")
     end
     return false
@@ -1220,9 +1259,10 @@ end
 
 
 """
-    Profile.take_heap_snapshot(io::IOStream, all_one::Bool=false)
-    Profile.take_heap_snapshot(filepath::String, all_one::Bool=false)
-    Profile.take_heap_snapshot(all_one::Bool=false; dir::String)
+    Profile.take_heap_snapshot(filepath::String, all_one::Bool=false;
+                               redact_data::Bool=true, streaming::Bool=false)
+    Profile.take_heap_snapshot(all_one::Bool=false; redact_data:Bool=true,
+                               dir::String=nothing, streaming::Bool=false)
 
 Write a snapshot of the heap, in the JSON format expected by the Chrome
 Devtools Heap Snapshot viewer (.heapsnapshot extension) to a file
@@ -1232,17 +1272,70 @@ full file path, or IO stream.
 
 If `all_one` is true, then report the size of every object as one so they can be easily
 counted. Otherwise, report the actual size.
+
+If `redact_data` is true (default), then do not emit the contents of any object.
+
+If `streaming` is true, we will stream the snapshot data out into four files, using filepath
+as the prefix, to avoid having to hold the entire snapshot in memory. This option should be
+used for any setting where your memory is constrained. These files can then be reassembled
+by calling Profile.HeapSnapshot.assemble_snapshot(), which can
+be done offline.
+
+NOTE: We strongly recommend setting streaming=true for performance reasons. Reconstructing
+the snapshot from the parts requires holding the entire snapshot in memory, so if the
+snapshot is large, you can run out of memory while processing it. Streaming allows you to
+reconstruct the snapshot offline, after your workload is done running.
+If you do attempt to collect a snapshot with streaming=false (the default, for
+backwards-compatibility) and your process is killed, note that this will always save the
+parts in the same directory as your provided filepath, so you can still reconstruct the
+snapshot after the fact, via `assemble_snapshot()`.
 """
-function take_heap_snapshot(io::IOStream, all_one::Bool=false)
-    Base.@_lock_ios(io, ccall(:jl_gc_take_heap_snapshot, Cvoid, (Ptr{Cvoid}, Cchar), io.handle, Cchar(all_one)))
-end
-function take_heap_snapshot(filepath::String, all_one::Bool=false)
-    open(filepath, "w") do io
-        take_heap_snapshot(io, all_one)
+function take_heap_snapshot(filepath::AbstractString, all_one::Bool=false; redact_data::Bool=true, streaming::Bool=false)
+    if streaming
+        _stream_heap_snapshot(filepath, all_one, redact_data)
+    else
+        # Support the legacy, non-streaming mode, by first streaming the parts, then
+        # reassembling it after we're done.
+        prefix = filepath
+        _stream_heap_snapshot(prefix, all_one, redact_data)
+        Profile.HeapSnapshot.assemble_snapshot(prefix, filepath)
     end
     return filepath
 end
-function take_heap_snapshot(all_one::Bool=false; dir::Union{Nothing,S}=nothing) where {S <: AbstractString}
+function take_heap_snapshot(io::IO, all_one::Bool=false; redact_data::Bool=true)
+    # Support the legacy, non-streaming mode, by first streaming the parts to a tempdir,
+    # then reassembling it after we're done.
+    dir = tempdir()
+    prefix = joinpath(dir, "snapshot")
+    _stream_heap_snapshot(prefix, all_one, redact_data)
+    Profile.HeapSnapshot.assemble_snapshot(prefix, io)
+end
+function _stream_heap_snapshot(prefix::AbstractString, all_one::Bool, redact_data::Bool)
+    # Nodes and edges are binary files
+    open("$prefix.nodes", "w") do nodes
+        open("$prefix.edges", "w") do edges
+            open("$prefix.strings", "w") do strings
+                # The following file is json data
+                open("$prefix.metadata.json", "w") do json
+                    Base.@_lock_ios(nodes,
+                    Base.@_lock_ios(edges,
+                    Base.@_lock_ios(strings,
+                    Base.@_lock_ios(json,
+                        ccall(:jl_gc_take_heap_snapshot,
+                            Cvoid,
+                            (Ptr{Cvoid},Ptr{Cvoid},Ptr{Cvoid},Ptr{Cvoid}, Cchar, Cchar),
+                            nodes.handle, edges.handle, strings.handle, json.handle,
+                            Cchar(all_one), Cchar(redact_data))
+                    )
+                    )
+                    )
+                    )
+                end
+            end
+        end
+    end
+end
+function take_heap_snapshot(all_one::Bool=false; dir::Union{Nothing,S}=nothing, kwargs...) where {S <: AbstractString}
     fname = "$(getpid())_$(time_ns()).heapsnapshot"
     if isnothing(dir)
         wd = pwd()
@@ -1257,11 +1350,27 @@ function take_heap_snapshot(all_one::Bool=false; dir::Union{Nothing,S}=nothing) 
     else
         fpath = joinpath(expanduser(dir), fname)
     end
-    return take_heap_snapshot(fpath, all_one)
+    return take_heap_snapshot(fpath, all_one; kwargs...)
 end
 
+"""
+    Profile.take_page_profile(io::IOStream)
+    Profile.take_page_profile(filepath::String)
+
+Write a JSON snapshot of the pages from Julia's pool allocator, printing for every pool allocated object, whether it's garbage, or its type.
+"""
+function take_page_profile(io::IOStream)
+    Base.@_lock_ios(io, ccall(:jl_gc_take_page_profile, Cvoid, (Ptr{Cvoid},), io.handle))
+end
+function take_page_profile(filepath::String)
+    open(filepath, "w") do io
+        take_page_profile(io)
+    end
+    return filepath
+end
 
 include("Allocs.jl")
+include("heapsnapshot_reassemble.jl")
 include("precompile.jl")
 
 end # module
