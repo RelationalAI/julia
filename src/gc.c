@@ -1472,6 +1472,20 @@ static void gc_sweep_page(gc_page_profiler_serializer_t *s, jl_gc_pool_t *p, jl_
             int bits = v->bits.gc;
             // if an object is past `lim_newpages` then we can guarantee it's garbage
             if (!gc_marked(bits) || (char*)v >= lim_newpages) {
+                if (jl_is_method_instance(jl_valueof(v)) || jl_is_method(jl_valueof(v))) {
+                    if (!v->bits.obj_whose_gc_was_delayed) {
+                        v->bits.obj_whose_gc_was_delayed = 1;
+                        goto next_obj;
+                    }
+                }
+                if (jl_is_code_instance(jl_valueof(v))) {
+                    jl_code_instance_t *ci = (jl_code_instance_t*)jl_valueof(v);
+                    // Print the CI's method
+                    jl_method_instance_t *mi = ci->def;
+                    jl_method_t *m = mi->def.method;
+                    jl_(m);
+                    jl_safe_printf("=====\n");
+                }
                 *pfl = v;
                 pfl = &v->next;
                 pfl_begin = (pfl_begin != NULL) ? pfl_begin : pfl;
@@ -1485,6 +1499,7 @@ static void gc_sweep_page(gc_page_profiler_serializer_t *s, jl_gc_pool_t *p, jl_
                 has_marked |= gc_marked(bits);
                 freedall = 0;
             }
+        next_obj:
             v = (jl_taggedvalue_t*)((char*)v + osize);
         }
         assert(!freedall);
