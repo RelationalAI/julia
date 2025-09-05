@@ -133,6 +133,9 @@ namespace jl_intrinsics {
     // `julia.queue_gc_root`: an intrinsic that queues a GC root.
     extern const IntrinsicDescription queueGCRoot;
 
+    // `julia.log_field_write`: an intrinsic that logs a field write for the GC.
+    extern const IntrinsicDescription logFieldWrite;
+
     // `julia.safepoint`: an intrinsic that triggers a GC safepoint.
     extern const IntrinsicDescription safepoint;
 }
@@ -155,6 +158,9 @@ namespace jl_well_known {
 
     // `jl_gc_queue_root`: queues a GC root.
     extern const WellKnownFunctionDescription GCQueueRoot;
+
+    // `jl_gc_log_field_write`: logs a field write for the GC.
+    extern const WellKnownFunctionDescription GCLogFieldWrite;
 
     // `jl_gc_alloc_typed`: allocates bytes.
     extern const WellKnownFunctionDescription GCAllocTyped;

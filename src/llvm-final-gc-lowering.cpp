@@ -9,6 +9,7 @@ STATISTIC(PopGCFrameCount, "Number of lowered popGCFrameFunc intrinsics");
 STATISTIC(GetGCFrameSlotCount, "Number of lowered getGCFrameSlotFunc intrinsics");
 STATISTIC(GCAllocBytesCount, "Number of lowered GCAllocBytesFunc intrinsics");
 STATISTIC(QueueGCRootCount, "Number of lowered queueGCRootFunc intrinsics");
+STATISTIC(LogFieldWriteCount, "Number of lowered logFieldWriteFunc intrinsics");
 STATISTIC(SafepointCount, "Number of lowered safepoint intrinsics");
 
 void FinalLowerGC::lowerNewGCFrame(CallInst *target, Function &F)
@@ -107,6 +108,13 @@ void FinalLowerGC::lowerQueueGCRoot(CallInst *target, Function &F)
     target->setCalledFunction(queueRootFunc);
 }
 
+void FinalLowerGC::lowerLogFieldWrite(CallInst *target, Function &F)
+{
+    ++LogFieldWriteCount;
+    assert(target->arg_size() == 1);
+    target->setCalledFunction(logFieldWriteFunc);
+}
+
 void FinalLowerGC::lowerSafepoint(CallInst *target, Function &F)
 {
     ++SafepointCount;
@@ -178,6 +186,7 @@ bool FinalLowerGC::runOnFunction(Function &F)
     }
     LLVM_DEBUG(dbgs() << "FINAL GC LOWERING: Processing function " << F.getName() << "\n");
     queueRootFunc = getOrDeclare(jl_well_known::GCQueueRoot);
+    logFieldWriteFunc = getOrDeclare(jl_well_known::GCLogFieldWrite);
     smallAllocFunc = getOrDeclare(jl_well_known::GCSmallAlloc);
     bigAllocFunc = getOrDeclare(jl_well_known::GCBigAlloc);
     allocTypedFunc = getOrDeclare(jl_well_known::GCAllocTyped);
@@ -207,6 +216,7 @@ bool FinalLowerGC::runOnFunction(Function &F)
             LOWER_INTRINSIC(popGCFrame, lowerPopGCFrame);
             LOWER_INTRINSIC(GCAllocBytes, lowerGCAllocBytes);
             LOWER_INTRINSIC(queueGCRoot, lowerQueueGCRoot);
+            LOWER_INTRINSIC(logFieldWrite, lowerLogFieldWrite);
             LOWER_INTRINSIC(safepoint, lowerSafepoint);
 
 #undef LOWER_INTRINSIC

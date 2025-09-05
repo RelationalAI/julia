@@ -1241,6 +1241,8 @@ JL_DLLEXPORT jl_weakref_t *jl_gc_new_weakref(jl_value_t *value);
 
 // GC write barriers
 
+void gc_assert_obj_validity_(const void *obj) JL_NOTSAFEPOINT;
+
 STATIC_INLINE void jl_gc_wb(const void *parent, const void *ptr) JL_NOTSAFEPOINT
 {
     // parent and ptr isa jl_value_t*

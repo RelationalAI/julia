@@ -146,6 +146,7 @@ namespace jl_intrinsics {
     static const char *PUSH_GC_FRAME_NAME = "julia.push_gc_frame";
     static const char *POP_GC_FRAME_NAME = "julia.pop_gc_frame";
     static const char *QUEUE_GC_ROOT_NAME = "julia.queue_gc_root";
+    static const char *LOG_FIELD_WRITE_NAME = "julia.log_field_write";
     static const char *SAFEPOINT_NAME = "julia.safepoint";
 
     // Annotates a function with attributes suitable for GC allocation
@@ -254,6 +255,22 @@ namespace jl_intrinsics {
             return intrinsic;
         });
 
+    const IntrinsicDescription logFieldWrite(
+        LOG_FIELD_WRITE_NAME,
+        [](Type *T_size) {
+            auto &ctx = T_size->getContext();
+            auto T_int = Type::getInt64Ty(ctx);
+            auto intrinsic = Function::Create(
+                FunctionType::get(
+                    Type::getVoidTy(ctx),
+                    { T_int, T_int },
+                    false),
+                Function::ExternalLinkage,
+                LOG_FIELD_WRITE_NAME);
+            intrinsic->setMemoryEffects(MemoryEffects::inaccessibleOrArgMemOnly());
+            return intrinsic;
+        });
+
     const IntrinsicDescription safepoint(
         SAFEPOINT_NAME,
         [](Type *T_size) {
@@ -275,6 +292,7 @@ namespace jl_well_known {
     static const char *GC_BIG_ALLOC_NAME = XSTR(jl_gc_big_alloc);
     static const char *GC_SMALL_ALLOC_NAME = XSTR(jl_gc_small_alloc);
     static const char *GC_QUEUE_ROOT_NAME = XSTR(jl_gc_queue_root);
+    static const char *GC_LOG_FIELD_WRITE_NAME = XSTR(jl_gc_log_field_write);
     static const char *GC_ALLOC_TYPED_NAME = XSTR(jl_gc_alloc_typed);
 
     using jl_intrinsics::addGCAllocAttributes;
@@ -323,6 +341,22 @@ namespace jl_well_known {
                     false),
                 Function::ExternalLinkage,
                 GC_QUEUE_ROOT_NAME);
+            func->setMemoryEffects(MemoryEffects::inaccessibleOrArgMemOnly());
+            return func;
+        });
+
+    const WellKnownFunctionDescription GCLogFieldWrite(
+        GC_LOG_FIELD_WRITE_NAME,
+        [](Type *T_size) {
+            auto &ctx = T_size->getContext();
+            auto T_int = Type::getInt64Ty(ctx);
+            auto func = Function::Create(
+                FunctionType::get(
+                    Type::getVoidTy(ctx),
+                    { T_int, T_int },
+                    false),
+                Function::ExternalLinkage,
+                GC_LOG_FIELD_WRITE_NAME);
             func->setMemoryEffects(MemoryEffects::inaccessibleOrArgMemOnly());
             return func;
         });
