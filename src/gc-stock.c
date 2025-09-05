@@ -1483,6 +1483,14 @@ JL_DLLEXPORT void jl_gc_queue_root(const jl_value_t *ptr)
     }
 }
 
+void gc_field_logger_append_entry(jl_value_t *parent, jl_value_t **child);
+JL_DLLEXPORT void jl_gc_log_field_write(int64_t parent_addr,int64_t child_addr)
+{
+    jl_value_t *parent = *(jl_value_t**)parent_addr;
+    jl_value_t **child = (jl_value_t**)child_addr;
+    gc_field_logger_append_entry(parent, child);
+}
+
 void jl_gc_queue_multiroot(const jl_value_t *parent, const void *ptr, jl_datatype_t *dt) JL_NOTSAFEPOINT
 {
     const jl_datatype_layout_t *ly = dt->layout;
@@ -3399,6 +3407,7 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
 
 extern int jl_heartbeat_pause(void);
 extern int jl_heartbeat_resume(void);
+extern void gc_reset_field_logger(void);
 
 JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
 {
@@ -3474,6 +3483,7 @@ JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)
 
     gc_n_threads = 0;
     gc_all_tls_states = NULL;
+    gc_reset_field_logger();
     jl_heartbeat_resume();
     jl_safepoint_end_gc();
     jl_gc_state_set(ptls, old_state, JL_GC_STATE_WAITING);
@@ -3674,6 +3684,7 @@ void jl_concurrent_gc_threadfun(void *arg)
 }
 
 // System-wide initializations
+extern uv_mutex_t gc_field_log_lock;
 void jl_gc_init(void)
 {
     JL_MUTEX_INIT(&heapsnapshot_lock, "heapsnapshot_lock");
@@ -3685,6 +3696,7 @@ void jl_gc_init(void)
     uv_cond_init(&gc_threads_cond);
     uv_sem_init(&gc_sweep_assists_needed, 0);
     uv_mutex_init(&gc_queue_observer_lock);
+    uv_mutex_init(&gc_field_log_lock);
     void *_addr = (void*)calloc_s(1); // dummy allocation to get the sentinel tag
     uintptr_t addr = (uintptr_t)_addr;
     gc_bigval_sentinel_tag = addr;

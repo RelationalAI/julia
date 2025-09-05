@@ -1956,7 +1956,9 @@ MDNode *createMutableTBAAAccessTag(MDNode *Tag) {
 void LateLowerGCFrame::CleanupWriteBarriers(Function &F, State *S, const SmallVector<CallInst*, 0> &WriteBarriers, bool *CFGModified) {
     auto T_size = F.getParent()->getDataLayout().getIntPtrType(F.getContext());
     for (auto CI : WriteBarriers) {
+        IRBuilder<> builder(CI);
         auto parent = CI->getArgOperand(0);
+        auto parent_ptr_as_int = builder.CreatePtrToInt(parent, T_size, parent->getName() + ".as_int");
         if (std::all_of(CI->op_begin() + 1, CI->op_end(),
                     [parent, &S](Value *child) { return parent == child || IsPermRooted(child, S); })) {
             CI->eraseFromParent();
@@ -1965,8 +1967,6 @@ void LateLowerGCFrame::CleanupWriteBarriers(Function &F, State *S, const SmallVe
         if (CFGModified) {
             *CFGModified = true;
         }
-
-        IRBuilder<> builder(CI);
         builder.SetCurrentDebugLocation(CI->getDebugLoc());
         auto parBits = builder.CreateAnd(EmitLoadTag(builder, T_size, parent), GC_OLD_MARKED, "parent_bits");
         auto parOldMarked = builder.CreateICmpEQ(parBits, ConstantInt::get(T_size, GC_OLD_MARKED), "parent_old_marked");
@@ -1976,6 +1976,8 @@ void LateLowerGCFrame::CleanupWriteBarriers(Function &F, State *S, const SmallVe
         Value *anyChldNotMarked = NULL;
         for (unsigned i = 1; i < CI->arg_size(); i++) {
             Value *child = CI->getArgOperand(i);
+            auto child_ptr_as_int = builder.CreatePtrToInt(child, T_size, child->getName() + ".as_int");
+            builder.CreateCall(getOrDeclare(jl_intrinsics::logFieldWrite), {parent_ptr_as_int, child_ptr_as_int});
             Value *chldBit = builder.CreateAnd(EmitLoadTag(builder, T_size, child), GC_MARKED, "child_bit");
             Value *chldNotMarked = builder.CreateICmpEQ(chldBit, ConstantInt::get(T_size, 0), "child_not_marked");
             anyChldNotMarked = anyChldNotMarked ? builder.CreateOr(anyChldNotMarked, chldNotMarked) : chldNotMarked;

@@ -45,7 +45,7 @@ FLAGS += -I$(LOCALBASE)/include
 endif
 
 # GC source code. It depends on which GC implementation to use.
-GC_SRCS := gc-common gc-stacks gc-alloc-profiler gc-heap-snapshot
+GC_SRCS := gc-common gc-stacks gc-alloc-profiler gc-field-logger gc-heap-snapshot
 ifneq (${MMTK_PLAN},None)
 GC_SRCS += gc-mmtk
 else
