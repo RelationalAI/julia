@@ -2146,6 +2146,9 @@ static GlobalVariable *get_pointer_to_constant(jl_codegen_params_t &emission_con
             gv = get_gv(gvname);
         }
     }
+    if (!gv->getName().starts_with(name.str())) {
+        jl_printf((JL_STREAM*)STDERR_FILENO, "get_pointer_to_constant: gv=%s, name=%s\n", gv->getName().str().c_str(), name.str().c_str());
+    }
     assert(gv->getName().starts_with(name.str()));
     assert(val == gv->getInitializer());
     return gv;
