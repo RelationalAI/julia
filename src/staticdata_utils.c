@@ -234,7 +234,14 @@ static jl_array_t *queue_external_cis(jl_array_t *list)
             continue;
         jl_method_instance_t *mi = ci->def;
         jl_method_t *m = mi->def.method;
-        if (ci->inferred && jl_is_method(m) && jl_object_in_image((jl_value_t*)m->module)) {
+        int for_serialized_method = jl_is_method(m) && jl_object_in_image((jl_value_t*)m->module);
+        int has_code = 0;
+        if (getenv("JULIA_SERIALIZE_MACHINE_CODE_ONLY") != NULL) {
+            has_code = ci->invoke != NULL;
+        } else {
+            has_code = ci->inferred != NULL;
+        }
+        if (has_code && for_serialized_method) {
             int found = has_backedge_to_worklist(mi, &visited, &stack);
             assert(found == 0 || found == 1 || found == 2);
             assert(stack.len == 0);
