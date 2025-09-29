@@ -127,8 +127,8 @@ end
 
 
 function multiq_deletemin()
-    local rn1, rn2
-    local prio1, prio2
+    local rn1
+    local prio1
 
     tid = Threads.threadid()
     tp = ccall(:jl_threadpoolid, Int8, (Int16,), tid-1) + 1
@@ -145,13 +145,8 @@ function multiq_deletemin()
             return nothing
         end
         rn1 = cong(heap_p, cong_unbias[tp])
-        rn2 = cong(heap_p, cong_unbias[tp])
         prio1 = tpheaps[rn1].priority
-        prio2 = tpheaps[rn2].priority
-        if prio1 > prio2
-            prio1 = prio2
-            rn1 = rn2
-        elseif prio1 == prio2 && prio1 == typemax(UInt16)
+        if prio1 == typemax(UInt16)
             continue
         end
         if trylock(tpheaps[rn1].lock)
