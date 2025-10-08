@@ -806,7 +806,10 @@ function enq_work(t::Task)
             tid = 0
         end
     end
-    ccall(:jl_wakeup_thread, Cvoid, (Int16,), (tid - 1) % Int16)
+    # nosleep
+    if tid != 0
+        ccall(:jl_wakeup_thread, Cvoid, (Int16,), (tid - 1) % Int16)
+    end
     return t
 end
 

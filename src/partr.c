@@ -241,6 +241,8 @@ static int sleep_check_after_threshold(uint64_t *start_cycles)
      */
     if (jl_running_under_rr(0))
         return 1;
+    return 0;
+    /* nosleep
     if (!(*start_cycles)) {
         *start_cycles = jl_hrtime();
         return 0;
@@ -251,6 +253,7 @@ static int sleep_check_after_threshold(uint64_t *start_cycles)
         return 1;
     }
     return 0;
+    */
 }
 
 
@@ -318,11 +321,13 @@ JL_DLLEXPORT void jl_wakeup_thread(int16_t tid) JL_NOTSAFEPOINT
         // in the future, we might want to instead wake some fraction of threads,
         // and let each of those wake additional threads if they find work
         int anysleep = 0;
+        /* nosleep
         int nthreads = jl_atomic_load_acquire(&jl_n_threads);
         for (tid = 0; tid < nthreads; tid++) {
             if (tid != self)
                 anysleep |= wake_thread(tid);
         }
+        */
         // check if we need to notify uv_run too
         if (uvlock != ct && anysleep) {
             jl_fence();
