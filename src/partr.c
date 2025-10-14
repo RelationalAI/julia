@@ -279,6 +279,13 @@ static void wake_libuv(void) JL_NOTSAFEPOINT
     JULIA_DEBUG_SLEEPWAKE( io_wakeup_leave = cycleclock() );
 }
 
+_Atomic(uint64_t) wake_all_threads_time = 0;
+
+JL_DLLEXPORT uint64_t jl_get_wake_all_threads_time(void)
+{
+    return jl_atomic_load_relaxed(&wake_all_threads_time);
+}
+
 /* ensure thread tid is awake if necessary */
 JL_DLLEXPORT void jl_wakeup_thread(int16_t tid) JL_NOTSAFEPOINT
 {
@@ -317,12 +324,15 @@ JL_DLLEXPORT void jl_wakeup_thread(int16_t tid) JL_NOTSAFEPOINT
         // something added to the multi-queue: notify all threads
         // in the future, we might want to instead wake some fraction of threads,
         // and let each of those wake additional threads if they find work
+        uint64_t tw = jl_hrtime();
         int anysleep = 0;
         int nthreads = jl_atomic_load_acquire(&jl_n_threads);
         for (tid = 0; tid < nthreads; tid++) {
             if (tid != self)
                 anysleep |= wake_thread(tid);
         }
+        tw = jl_hrtime() - tw;
+        jl_atomic_fetch_add_relaxed(&wake_all_threads_time, tw);
         // check if we need to notify uv_run too
         if (uvlock != ct && anysleep) {
             jl_fence();
