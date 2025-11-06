@@ -2392,12 +2392,6 @@ static void record_precompile_statement(jl_method_instance_t *mi, double compila
     if (!jl_is_method(def))
         return;
 
-    // nested layer of this precompile statement
-    int nested_level = 0;
-    if (jl_atomic_load_relaxed(&(jl_codegen_lock.owner)) == jl_current_task) {
-        nested_level = jl_codegen_lock.count;
-    }
-
     JL_LOCK(&precomp_statement_out_lock);
     if (s_precompile == NULL) {
         const char *t = jl_options.trace_compile;
@@ -2420,11 +2414,8 @@ static void record_precompile_statement(jl_method_instance_t *mi, double compila
         // compilation inline properties/files as a json dictionary
         if (force_trace_compile || jl_options.trace_compile_timing) {
             jl_printf(s_precompile, " #= { "); // json starts
-            // nested level: 0 -> not nested, >= 1, nested amount
-            jl_printf(s_precompile, "\"nested_levels\": %d, ", nested_level);
             // time spent waiting to acquire the codegen lock, in milliseconds
             jl_printf(s_precompile, "\"codegen_waiting_time\": %.2f ", codegen_lock_waiting_time / 1e6);
-
             jl_printf(s_precompile, "} =#"); // json ends
         }
         jl_printf(s_precompile, "\n");
