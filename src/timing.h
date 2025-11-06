@@ -118,7 +118,7 @@ typedef struct ___tracy_source_location_data TracySrcLocData;
 #ifdef __cplusplus
 extern "C" {
 #endif
-void jl_print_timings(void);
+JL_DLLEXPORT void jl_print_timings(void);
 
 void jl_timing_task_init(jl_task_t *t);
 void jl_timing_block_task_enter(jl_task_t *ct, jl_ptls_t ptls, jl_timing_block_t *prev_blk);

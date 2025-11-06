@@ -57,7 +57,7 @@ static int cmp_counts_events(const void *a, const void *b) {
 }
 #endif
 
-void jl_print_timings(void)
+JL_DLLEXPORT void jl_print_timings(void)
 {
 #ifdef USE_TIMING_COUNTS
     qsort(jl_timing_counts_events.items, jl_timing_counts_events.len,
