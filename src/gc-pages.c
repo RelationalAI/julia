@@ -27,10 +27,12 @@ JL_DLLEXPORT uint64_t jl_get_pg_size(void)
 #define MIN_BLOCK_PG_ALLOC (1) // 16 KB
 
 static int block_pg_cnt = DEFAULT_BLOCK_PG_ALLOC;
+static _Atomic(uint64_t) current_pg_count = 0;
 
 // Julia allocates large blocks (64M) with mmap. These are never
 // unmapped but the underlying physical memory may be released
 // with calls to madvise(MADV_DONTNEED).
+static uint64_t poolmem_blocks_allocated = 0;
 static uint64_t poolmem_blocks_allocated_total = 0;
 
 JL_DLLEXPORT uint64_t jl_poolmem_blocks_allocated_total(void)
@@ -40,14 +42,12 @@ JL_DLLEXPORT uint64_t jl_poolmem_blocks_allocated_total(void)
 
 JL_DLLEXPORT uint64_t jl_poolmem_bytes_allocated(void)
 {
-    return jl_atomic_load_relaxed(&gc_heap_stats.bytes_resident);
+    return poolmem_blocks_allocated;
 }
 
 JL_DLLEXPORT uint64_t jl_current_pg_count(void)
 {
-    assert(jl_page_size == GC_PAGE_SZ && "RAI fork of Julia should be running on platforms for which jl_page_size == GC_PAGE_SZ");
-    size_t nb = jl_atomic_load_relaxed(&gc_heap_stats.bytes_resident);
-    return nb / GC_PAGE_SZ; // exact division
+    return (uint64_t)jl_atomic_load(&current_pg_count);
 }
 
 void jl_gc_init_page(void)
@@ -77,6 +77,8 @@ char *jl_gc_try_alloc_pages_(int pg_cnt) JL_NOTSAFEPOINT
                             MAP_NORESERVE | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED)
         return NULL;
+    poolmem_blocks_allocated += pages_sz;
+    poolmem_blocks_allocated_total++;
 
 #ifdef MADV_NOHUGEPAGE
     madvise(mem, pages_sz, MADV_NOHUGEPAGE);
@@ -87,9 +89,6 @@ char *jl_gc_try_alloc_pages_(int pg_cnt) JL_NOTSAFEPOINT
         // round data pointer up to the nearest gc_page_data-aligned
         // boundary if mmap didn't already do so.
         mem = (char*)gc_page_data(mem + GC_PAGE_SZ - 1);
-    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_mapped, pages_sz);
-    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_resident, pages_sz);
-    poolmem_blocks_allocated_total++; // RAI-specific
     return mem;
 }
 
@@ -153,7 +152,6 @@ NOINLINE jl_gc_pagemeta_t *jl_gc_alloc_page(void) JL_NOTSAFEPOINT
     // try to get page from `pool_freed`
     meta = pop_lf_back(&global_page_pool_freed);
     if (meta != NULL) {
-        jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_resident, GC_PAGE_SZ);
         gc_alloc_map_set(meta->data, GC_PAGE_ALLOCATED);
         goto exit;
     }
@@ -187,6 +185,7 @@ exit:
     SetLastError(last_error);
 #endif
     errno = last_errno;
+    jl_atomic_fetch_add(&current_pg_count, 1);
     return meta;
 }
 
@@ -227,7 +226,7 @@ void jl_gc_free_page(jl_gc_pagemeta_t *pg) JL_NOTSAFEPOINT
     madvise(p, decommit_size, MADV_DONTNEED);
 #endif
     msan_unpoison(p, decommit_size);
-    jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_resident, -decommit_size);
+    jl_atomic_fetch_add(&current_pg_count, -1);
 }
 
 #ifdef __cplusplus
