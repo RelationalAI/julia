@@ -2527,6 +2527,17 @@ static void jl_save_system_image_to_stream(ios_t *f, jl_array_t *mod_array,
             // Queue the new roots
             jl_queue_for_serialization(&s, method_roots_list);
             // Queue the edges
+            if (jl_options.drop_edges) {
+                // Empty ext_targets
+                ext_targets = jl_alloc_vec_any(0);
+                // The caller field in `edges` is used in loading so we only empty the
+                // callees array when we drop edges.
+                size_t i, l = jl_array_len(edges) / 2;
+                for (i = 0; i < l; i++) {
+                    jl_array_t *cids = jl_alloc_array_1d(jl_array_int32_type, 0);
+                    jl_array_ptr_set(edges, 2 * i + 1, cids);
+                }
+            }
             jl_queue_for_serialization(&s, ext_targets);
             jl_queue_for_serialization(&s, edges);
         }
