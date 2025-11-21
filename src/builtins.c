@@ -147,6 +147,8 @@ static int egal_types(const jl_value_t *a, const jl_value_t *b, jl_typeenv_t *en
 {
     if (a == b)
         return 1;
+    if (a->hash && b->hash && a->hash != b->hash)
+        return 0;
     uintptr_t dtag = jl_typetagof(a);
     if (dtag != jl_typetagof(b))
         return 0;
