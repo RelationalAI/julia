@@ -147,14 +147,14 @@ static int egal_types(const jl_value_t *a, const jl_value_t *b, jl_typeenv_t *en
 {
     if (a == b)
         return 1;
-    if (a->hash && b->hash && a->hash != b->hash)
-        return 0;
     uintptr_t dtag = jl_typetagof(a);
     if (dtag != jl_typetagof(b))
         return 0;
     if (dtag == jl_datatype_tag << 4) {
         jl_datatype_t *dta = (jl_datatype_t*)a;
         jl_datatype_t *dtb = (jl_datatype_t*)b;
+        if (dta->hash && dtb->hash && dta->hash != dtb->hash)
+            return 0;
         if (dta->name != dtb->name)
             return 0;
         size_t i, l = jl_nparams(dta);
