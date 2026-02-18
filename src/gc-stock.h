@@ -258,13 +258,6 @@ typedef struct {
     pagetable1_t *meta1[REGION2_PG_COUNT];
 } pagetable_t;
 
-typedef struct {
-    _Atomic(size_t) bytes_mapped;
-    _Atomic(size_t) bytes_resident;
-    _Atomic(size_t) heap_size;
-    _Atomic(size_t) heap_target;
-} gc_heapstatus_t;
-
 #define GC_PAGE_UNMAPPED        0
 #define GC_PAGE_ALLOCATED       1
 #define GC_PAGE_LAZILY_FREED    2
@@ -377,7 +370,6 @@ STATIC_INLINE unsigned ffs_u32(uint32_t bitvec)
 extern bigval_t *oldest_generation_of_bigvals;
 extern int64_t buffered_pages;
 extern int gc_first_tid;
-extern gc_heapstatus_t gc_heap_stats;
 
 STATIC_INLINE int gc_first_parallel_collector_thread_id(void) JL_NOTSAFEPOINT
 {
@@ -481,9 +473,10 @@ FORCE_INLINE void gc_big_object_link(bigval_t *sentinel_node, bigval_t *node) JL
 // Must be kept in sync with `base/timing.jl`
 #define FULL_SWEEP_REASON_SWEEP_ALWAYS_FULL (0)
 #define FULL_SWEEP_REASON_FORCED_FULL_SWEEP (1)
-#define FULL_SWEEP_REASON_USER_MAX_EXCEEDED (2)
-#define FULL_SWEEP_REASON_LARGE_PROMOTION_RATE (3)
-#define FULL_SWEEP_NUM_REASONS (4)
+#define FULL_SWEEP_REASON_ALLOCATION_INTERVAL_ABOVE_MAXMEM (2)
+#define FULL_SWEEP_REASON_LIVE_BYTES_ABOVE_MAX_TOTAL_MEMORY (3)
+#define FULL_SWEEP_REASON_LARGE_INTERGEN_FRONTIER (4)
+#define FULL_SWEEP_NUM_REASONS (5)
 
 extern JL_DLLEXPORT uint64_t jl_full_sweep_reasons[FULL_SWEEP_NUM_REASONS];
 STATIC_INLINE void gc_count_full_sweep_reason(int reason) JL_NOTSAFEPOINT
@@ -701,7 +694,7 @@ void gc_count_pool(void);
 JL_DLLEXPORT void jl_enable_gc_logging(int enable);
 JL_DLLEXPORT int jl_is_gc_logging_enabled(void);
 JL_DLLEXPORT uint32_t jl_get_num_stack_mappings(void);
-void _report_gc_finished(uint64_t pause, uint64_t freed, int full, int recollect, int64_t live_bytes) JL_NOTSAFEPOINT;
+void _report_gc_finished(uint64_t pause, uint64_t freed, int full, int recollect) JL_NOTSAFEPOINT;
 
 #ifdef __cplusplus
 }

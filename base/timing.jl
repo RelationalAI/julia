@@ -113,7 +113,8 @@ end
 @static if Base.USING_STOCK_GC
 # must be kept in sync with `src/gc-stock.h``
 const FULL_SWEEP_REASONS = [:FULL_SWEEP_REASON_SWEEP_ALWAYS_FULL, :FULL_SWEEP_REASON_FORCED_FULL_SWEEP,
-                            :FULL_SWEEP_REASON_USER_MAX_EXCEEDED, :FULL_SWEEP_REASON_LARGE_PROMOTION_RATE]
+                            :FULL_SWEEP_REASON_ALLOCATION_INTERVAL_ABOVE_MAXMEM, :FULL_SWEEP_REASON_LIVE_BYTES_ABOVE_MAX_TOTAL_MEMORY,
+                            :FULL_SWEEP_REASON_LARGE_INTERGEN_FRONTIER]
 end
 
 """
@@ -124,21 +125,22 @@ Return a dictionary of the number of times each full sweep reason has occurred.
 The reasons are:
 - `:FULL_SWEEP_REASON_SWEEP_ALWAYS_FULL`: Full sweep was caused due to `always_full` being set in the GC debug environment
 - `:FULL_SWEEP_REASON_FORCED_FULL_SWEEP`: Full sweep was forced by `GC.gc(true)`
-- `:FULL_SWEEP_REASON_USER_MAX_EXCEEDED`: Full sweep was forced due to the system reaching the heap soft size limit
-- `:FULL_SWEEP_REASON_LARGE_PROMOTION_RATE`: Full sweep was forced by a large promotion rate across GC generations
+- `:FULL_SWEEP_REASON_ALLOCATION_INTERVAL_ABOVE_MAXMEM`: Full sweep was forced by the allocation interval being above the total
+    memory in the machine (as returned by LibUV) divided by the number of mutator threads
+- `:FULL_SWEEP_REASON_LIVE_BYTES_ABOVE_MAX_TOTAL_MEMORY`: Full sweep was caused due to live bytes being above the
+    soft heap limit size (which is either automatically computed at initialization based on the total memory provided by LibUV,
+    or set by the user via `--heap-size-hint`)
+- `:FULL_SWEEP_REASON_LARGE_INTERGEN_FRONTIER`: Full sweep was forced by the intergenerational frontier being too large
+    (i.e. too many pointers in the remembered set)
 
 Note that the set of reasons is not guaranteed to be stable across minor versions of Julia.
 """
 function full_sweep_reasons()
+    reason = cglobal(:jl_full_sweep_reasons, UInt64)
+    reasons_as_array = Base.unsafe_wrap(Vector{UInt64}, reason, length(FULL_SWEEP_REASONS), own=false)
     d = Dict{Symbol, Int64}()
-    # populate the dictionary according to the reasons above for the stock GC
-    # otherwise return an empty dictionary for now
-    @static if Base.USING_STOCK_GC
-        reason = cglobal(:jl_full_sweep_reasons, UInt64)
-        reasons_as_array = Base.unsafe_wrap(Vector{UInt64}, reason, length(FULL_SWEEP_REASONS), own=false)
-        for (i, r) in enumerate(FULL_SWEEP_REASONS)
-            d[r] = reasons_as_array[i]
-        end
+    for (i, r) in enumerate(FULL_SWEEP_REASONS)
+        d[r] = reasons_as_array[i]
     end
     return d
 end
