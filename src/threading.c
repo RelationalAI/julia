@@ -949,8 +949,10 @@ JL_DLLEXPORT uint64_t jl_get_lock_waiting_time(void)
 {
     uint64_t waiting_time = 0;
     int nthreads = jl_atomic_load_acquire(&jl_n_threads);
+    int ngcthreads = jl_atomic_load_acquire(&jl_n_gcthreads);
+    int nmutatorthreads = nthreads - ngcthreads;
     jl_ptls_t *all_tls_states = jl_atomic_load_relaxed(&jl_all_tls_states);
-    for (int i = 0; i < nthreads; i++) {
+    for (int i = 0; i < nmutatorthreads; i++) {
         jl_ptls_t ptls = all_tls_states[i];
         if (ptls) {
             waiting_time += jl_atomic_load_relaxed(&ptls->lock_waiting_time);
