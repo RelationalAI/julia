@@ -75,6 +75,8 @@ function cumulative_compile_time_ns()
     return comp, recomp
 end
 
+# Time spent JIT-compiling Julia method instances, a subset of
+# `cumulative_compile_time_ns`
 fptr_compile_time_ns() = ccall(:jl_fptr_compile_time_ns, UInt64, ())
 
 function cumulative_compile_timing(b::Bool)
