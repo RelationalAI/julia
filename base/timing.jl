@@ -68,6 +68,9 @@ function gc_alloc_count(diff::GC_Diff)
     diff.malloc + diff.realloc + diff.poolalloc + diff.bigalloc
 end
 
+lock_waiting_time(tid::Int16) = ccall(:jl_get_thread_lock_waiting_time, UInt64, (Int16,), tid)
+lock_waiting_time() = ccall(:jl_get_lock_waiting_time, UInt64, ())
+
 # cumulative total time spent on compilation and recompilation, in nanoseconds
 function cumulative_compile_time_ns()
     comp = ccall(:jl_cumulative_compile_time_ns, UInt64, ())
