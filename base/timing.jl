@@ -71,7 +71,7 @@ end
 # Retrieve the specified thread's, or the aggregated value across all threads
 # of wait time on all the locks for which wait-time measurement has been
 # enabled (for RAI, currently only the codegen lock).
-lock_waiting_time_ns(tid::Int16) = ccall(:jl_get_thread_lock_waiting_time, UInt64, (Int16,), tid)
+lock_waiting_time_ns(tid::Integer) = ccall(:jl_get_thread_lock_waiting_time, UInt64, (Cint,), tid-1)
 lock_waiting_time_ns() = ccall(:jl_get_lock_waiting_time, UInt64, ())
 
 # cumulative total time spent on compilation and recompilation, in nanoseconds
