@@ -28,6 +28,28 @@ JL_DLLEXPORT uint64_t jl_get_pg_size(void)
 
 static int block_pg_cnt = DEFAULT_BLOCK_PG_ALLOC;
 
+// Julia allocates large blocks (64M) with mmap. These are never
+// unmapped but the underlying physical memory may be released
+// with calls to madvise(MADV_DONTNEED).
+static uint64_t poolmem_blocks_allocated_total = 0;
+
+JL_DLLEXPORT uint64_t jl_poolmem_blocks_allocated_total(void)
+{
+    return poolmem_blocks_allocated_total;
+}
+
+JL_DLLEXPORT uint64_t jl_poolmem_bytes_allocated(void)
+{
+    return jl_atomic_load_relaxed(&gc_heap_stats.bytes_resident);
+}
+
+JL_DLLEXPORT uint64_t jl_current_pg_count(void)
+{
+    assert(jl_page_size == GC_PAGE_SZ && "RAI fork of Julia should be running on platforms for which jl_page_size == GC_PAGE_SZ");
+    size_t nb = jl_atomic_load_relaxed(&gc_heap_stats.bytes_resident);
+    return nb / GC_PAGE_SZ; // exact division
+}
+
 void jl_gc_init_page(void)
 {
     if (GC_PAGE_SZ * block_pg_cnt < jl_page_size)
@@ -55,6 +77,11 @@ char *jl_gc_try_alloc_pages_(int pg_cnt) JL_NOTSAFEPOINT
                             MAP_NORESERVE | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED)
         return NULL;
+
+#ifdef MADV_NOHUGEPAGE
+    madvise(mem, pages_sz, MADV_NOHUGEPAGE);
+#endif
+
 #endif
     if (GC_PAGE_SZ > jl_page_size)
         // round data pointer up to the nearest gc_page_data-aligned
@@ -62,6 +89,7 @@ char *jl_gc_try_alloc_pages_(int pg_cnt) JL_NOTSAFEPOINT
         mem = (char*)gc_page_data(mem + GC_PAGE_SZ - 1);
     jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_mapped, pages_sz);
     jl_atomic_fetch_add_relaxed(&gc_heap_stats.bytes_resident, pages_sz);
+    poolmem_blocks_allocated_total++; // RAI-specific
     return mem;
 }
 
@@ -184,7 +212,7 @@ void jl_gc_free_page(jl_gc_pagemeta_t *pg) JL_NOTSAFEPOINT
     }
 #ifdef _OS_WINDOWS_
     VirtualFree(p, decommit_size, MEM_DECOMMIT);
-#elif defined(MADV_FREE)
+#elif 0
     static int supports_madv_free = 1;
     if (supports_madv_free) {
         if (madvise(p, decommit_size, MADV_FREE) == -1) {

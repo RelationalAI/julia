@@ -554,6 +554,8 @@ extern jl_mutex_t global_roots_lock;
 extern jl_mutex_t profile_show_peek_cond_lock;
 extern jl_mutex_t jl_typeinf_lock;
 
+extern void jl_init_heartbeat(void);
+
 static void restore_fp_env(void)
 {
     if (jl_set_zero_subnormals(0) || jl_set_default_nans(0)) {
@@ -612,6 +614,11 @@ static NOINLINE void _finish_jl_init_(jl_image_buf_t sysimage, jl_ptls_t ptls, j
     jl_start_threads();
     jl_start_gc_threads();
     uv_barrier_wait(&thread_init_done);
+
+    if (jl_base_module != NULL) {
+        // requires code in Base
+        jl_init_heartbeat();
+    }
 
     jl_gc_enable(1);
 
@@ -751,6 +758,15 @@ JL_DLLEXPORT void jl_init_(jl_image_buf_t sysimage)
     jl_init_threadinginfra();
     if (jl_options.handle_signals == JL_OPTIONS_HANDLE_SIGNALS_ON)
         jl_install_default_signal_handlers();
+
+#if (defined(_OS_LINUX_) && defined(_CPU_X86_64_)) || (defined(_OS_DARWIN_) && defined(_CPU_AARCH64_))
+    if (jl_options.safe_crash_log_file != NULL) {
+        jl_sig_fd = open(jl_options.safe_crash_log_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (jl_sig_fd == -1) {
+            jl_error("fatal error: could not open safe crash log file for writing");
+        }
+    }
+#endif
 
     jl_gc_init();
 
