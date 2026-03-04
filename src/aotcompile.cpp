@@ -1688,6 +1688,10 @@ void jl_dump_native_impl(void *native_code,
         } else {
             jl_errorf("Failed to wait on semaphore '%s': %s", sem_name, strerror(errno));
         }
+    } else if (errno != ENOENT) {
+        // ENOENT means the semaphore doesn't exist, which is the normal path when not using
+        // compcache. Any other error is unexpected and worth surfacing.
+        jl_safe_printf("WARNING: sem_open(\"%s\") failed: %s\n", sem_name, strerror(errno));
     }
 #endif
 
