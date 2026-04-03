@@ -337,6 +337,8 @@ has already expired.
 If `spawn` is `true`, the created task will be spawned, meaning that it will be allowed
 to move thread, which avoids the side-effect of forcing the parent task to get stuck to the thread
 it is on. If `spawn` is `nothing` (default), the task will be spawned if the parent task isn't sticky.
+The `threadpool` keyword may be used to specify which thread pool the task should be spawned on
+whenever it is not sticky, which would otherwise default to the threadpool of the parent task.
 
 !!! compat "Julia 1.12"
     The `spawn` argument was introduced in Julia 1.12.
@@ -360,7 +362,13 @@ julia> begin
 3
 ```
 """
-function Timer(cb::Function, timeout; spawn::Union{Nothing,Bool}=nothing, kwargs...)
+function Timer(
+    cb::Function,
+    timeout;
+    spawn::Union{Nothing,Bool}=nothing,
+    threadpool::Union{Nothing,Symbol}=nothing,
+    kwargs...,
+)
     sticky = spawn === nothing ? current_task().sticky : !spawn
     timer = Timer(timeout; kwargs...)
     t = @task begin
@@ -377,6 +385,9 @@ function Timer(cb::Function, timeout; spawn::Union{Nothing,Bool}=nothing, kwargs
         end
     end
     t.sticky = sticky
+    if !t.sticky && threadpool !== nothing
+        Threads._spawn_set_thrpool(t, threadpool)
+    end
     # here we are mimicking parts of _trywait, in coordination with task `t`
     preserve_handle(timer)
     @lock timer.cond begin
