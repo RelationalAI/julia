@@ -595,6 +595,48 @@ let a = []
     @test timedwait(() -> a == [1], 10) === :ok
 end
 
+# Timer callback with threadpool specification
+let tp = Channel{Symbol}(0)
+    Timer(t -> put!(tp, Threads.threadpool()), 0.01, interval = 0, spawn = true, threadpool = :default)
+    @test take!(tp) == :default
+end
+
+# Timer callback with threadpool=nothing (should work same as without)
+let tp = Channel{Symbol}(0)
+    current_threadpool = Threads.threadpool()
+    Timer(t -> put!(tp, Threads.threadpool()), 0.01, interval = 0, spawn = true, threadpool = nothing)
+    @test take!(tp) == current_threadpool
+end
+
+# Timer callback with threadpool=:interactive if available
+if Threads.threadpoolsize(:interactive) > 0
+    let tp = Channel{Symbol}(0)
+        Timer(t -> put!(tp, Threads.threadpool()), 0.01, interval = 0, spawn = true, threadpool = :interactive)
+        @test take!(tp) == :interactive
+    end
+end
+
+# Timer callback with spawn=nothing (default, non-sticky) and threadpool specified
+let tp = Channel{Symbol}(0)
+    current_threadpool = Threads.threadpool()
+    threadpool = current_threadpool == :default ? :interactive : :default
+    expected_threadpool = if Threads.current_task().sticky
+        current_threadpool
+    else
+        threadpool
+    end
+    Timer(t -> put!(tp, Threads.threadpool()), 0.01, interval = 0, threadpool = threadpool)
+    @test take!(tp) == expected_threadpool
+end
+
+# Timer callback with spawn=false (sticky) => threadpool is ignored
+let tp = Channel{Symbol}(0)
+    current_threadpool = Threads.threadpool()
+    threadpool = current_threadpool == :default ? :interactive : :default
+    Timer(t -> put!(tp, Threads.threadpool()), 0.01, interval = 0, spawn = false, threadpool = threadpool)
+    @test take!(tp) == current_threadpool
+end
+
 # make sure that we don't accidentally create a one-shot timer
 let
     t = Timer(Returns(nothing), 10, interval=0.00001)
