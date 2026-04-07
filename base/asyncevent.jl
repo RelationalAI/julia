@@ -334,11 +334,11 @@ callback is only run once. The function `callback` is called with a single argum
 itself. Stop a timer by calling `close`. The `callback` may still be run one final time, if the timer
 has already expired.
 
-If `spawn` is `nothing` (default), the created task will inherit the sticky property of the parent task
-and will be spawned on the interactive threadpool if it is not sticky. To spawn on a specific threadpool,
-set `spawn` to a `Symbol` naming the threadpool (e.g., `:default` or `:interactive`). In this case,
-the created task will not be sticky and will be allowed to move between the threads assigned to that
-threadpool.
+If `spawn` is `nothing` (default), the created task will inherit the sticky property of the parent task.
+Additionally, if the created task is not sticky, it will be spawned on the interactive threadpool, if
+available. To spawn on a specific threadpool, set `spawn` to a `Symbol` naming the threadpool (e.g.,
+`:default` or `:interactive`). In this case, the created task will not be sticky and will be allowed
+to move between the threads assigned to that threadpool.
 
 !!! compat "Julia 1.12"
     The `spawn` argument was introduced in Julia 1.12.
