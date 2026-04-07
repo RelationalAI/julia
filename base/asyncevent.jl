@@ -362,8 +362,8 @@ julia> begin
 3
 ```
 """
-function Timer(cb::Function, timeout; spawn::Union{Nothing,Symbol}=nothing, kwargs...)
-    timer = Timer(timeout; kwargs...)
+function Timer(cb::Function, delay; spawn::Union{Nothing,Symbol}=nothing, kwargs...)
+    timer = Timer(delay; kwargs...)
     t = @task begin
         unpreserve_handle(timer)
         while _trywait(timer)
