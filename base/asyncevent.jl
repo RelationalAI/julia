@@ -324,7 +324,7 @@ end
 
 # timer with repeated callback
 """
-    Timer(callback::Function, delay; interval = 0, spawn::Union{Nothing,Bool}=nothing)
+    Timer(callback::Function, delay; interval = 0, spawn::Union{Nothing,Symbol}=nothing)
 
 Create a timer that runs the function `callback` at each timer expiration.
 
@@ -334,11 +334,11 @@ callback is only run once. The function `callback` is called with a single argum
 itself. Stop a timer by calling `close`. The `callback` may still be run one final time, if the timer
 has already expired.
 
-If `spawn` is `true`, the created task will be spawned, meaning that it will be allowed
-to move thread, which avoids the side-effect of forcing the parent task to get stuck to the thread
-it is on. If `spawn` is `nothing` (default), the task will be spawned if the parent task isn't sticky.
-The `threadpool` keyword may be used to specify which thread pool the task should be spawned on
-whenever it is not sticky, which would otherwise default to the threadpool of the parent task.
+If `spawn` is `nothing` (default), the created task will inherit the sticky property of the parent task
+and will be spawned on the interactive threadpool if it is not sticky. To spawn on a specific threadpool,
+set `spawn` to a `Symbol` naming the threadpool (e.g., `:default` or `:interactive`). In this case,
+the created task will not be sticky and will be allowed to move between the threads assigned to that
+threadpool.
 
 !!! compat "Julia 1.12"
     The `spawn` argument was introduced in Julia 1.12.
@@ -362,14 +362,7 @@ julia> begin
 3
 ```
 """
-function Timer(
-    cb::Function,
-    timeout;
-    spawn::Union{Nothing,Bool}=nothing,
-    threadpool::Union{Nothing,Symbol}=nothing,
-    kwargs...,
-)
-    sticky = spawn === nothing ? current_task().sticky : !spawn
+function Timer(cb::Function, timeout; spawn::Union{Nothing,Symbol}=nothing, kwargs...)
     timer = Timer(timeout; kwargs...)
     t = @task begin
         unpreserve_handle(timer)
@@ -384,9 +377,14 @@ function Timer(
             isopen(timer) || return
         end
     end
-    t.sticky = sticky
-    if !t.sticky && threadpool !== nothing
-        Threads._spawn_set_thrpool(t, threadpool)
+    if spawn === nothing
+        t.sticky = current_task().sticky
+        spawn = :interactive
+    else
+        t.sticky = false
+    end
+    if !t.sticky
+        Threads._spawn_set_thrpool(t, spawn)
     end
     # here we are mimicking parts of _trywait, in coordination with task `t`
     preserve_handle(timer)
