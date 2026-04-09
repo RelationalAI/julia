@@ -324,7 +324,7 @@ end
 
 # timer with repeated callback
 """
-    Timer(callback::Function, delay; interval = 0, spawn::Union{Nothing,Symbol}=nothing)
+    Timer(callback::Function, delay; interval = 0, spawn::Union{Nothing,Bool,Symbol}=nothing)
 
 Create a timer that runs the function `callback` at each timer expiration.
 
@@ -342,6 +342,10 @@ specific threadpool, set `spawn` to a `Symbol` naming the threadpool (e.g., `:de
 
 !!! compat "Julia 1.12"
     The `spawn` argument was introduced in Julia 1.12.
+
+!!! note
+    Starting in Julia 1.14, callback tasks are spawned on the interactive threadpool whenever
+    `spawn=nothing` and the parent task is not sticky or when `spawn=true`.
 
 # Examples
 
