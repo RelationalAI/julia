@@ -343,9 +343,13 @@ specific threadpool, set `spawn` to a `Symbol` naming the threadpool (e.g., `:de
 !!! compat "Julia 1.12"
     The `spawn` argument was introduced in Julia 1.12.
 
+!!! compat "Julia 1.14"
+    The Symbol variant of the `spawn` argument through which a threadpool can be specified was
+    introduced in Julia 1.14.
+
 !!! note
-    Starting in Julia 1.14, callback tasks are spawned on the interactive threadpool whenever
-    `spawn=nothing` and the parent task is not sticky or when `spawn=true`. As a result,
+    Starting in Julia 1.14, callback tasks are spawned on the interactive threadpool by default
+    whenever `spawn=nothing` and the parent task is not sticky or when `spawn=true`. As a result,
     callback tasks are expected to be lightweight and frequently yielding.
 
 # Examples
