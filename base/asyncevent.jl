@@ -345,7 +345,8 @@ specific threadpool, set `spawn` to a `Symbol` naming the threadpool (e.g., `:de
 
 !!! note
     Starting in Julia 1.14, callback tasks are spawned on the interactive threadpool whenever
-    `spawn=nothing` and the parent task is not sticky or when `spawn=true`.
+    `spawn=nothing` and the parent task is not sticky or when `spawn=true`. As a result, 
+    callback tasks are expected to be lightweight and frequently yielding.
 
 # Examples
 
