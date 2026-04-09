@@ -71,6 +71,8 @@ New library features
 * `replace(string, pattern...)` now supports an optional `IO` argument to
   write the output to a stream rather than returning a string ([#48625]).
 * `startswith` now supports seekable `IO` streams ([#43055]).
+* `Timer(f, ...)` will now match the stickiness of the parent task when creating timer tasks, which can be overridden
+  by the new `spawn` kwarg. This avoids the issue where sticky tasks i.e. `@async` make their parent sticky ([#56745])
 
 Standard library changes
 ------------------------
