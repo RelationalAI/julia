@@ -1222,6 +1222,8 @@ JL_DLLEXPORT void jl_print_backtrace(void) JL_NOTSAFEPOINT
 extern int jl_inside_heartbeat_thread(void);
 extern int jl_heartbeat_pause(void);
 extern int jl_heartbeat_resume(void);
+extern void jl_backtrace_dump_begin(void) JL_NOTSAFEPOINT;
+extern void jl_backtrace_dump_end(void) JL_NOTSAFEPOINT;
 
 // Print backtraces for all live tasks, for all threads, to jl_safe_printf
 // stderr. This can take a _long_ time!
@@ -1234,6 +1236,7 @@ JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
     if (!jl_inside_heartbeat_thread()) {
         jl_heartbeat_pause();
     }
+    jl_backtrace_dump_begin();
 
     size_t nthreads = jl_atomic_load_acquire(&jl_n_threads);
     jl_ptls_t *allstates = jl_atomic_load_relaxed(&jl_all_tls_states);
@@ -1298,6 +1301,7 @@ JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT
     }
     jl_safe_printf("thread (%d) ++++ Done\n", ctid);
 
+    jl_backtrace_dump_end();
     if (!jl_inside_heartbeat_thread()) {
         jl_heartbeat_resume();
     }

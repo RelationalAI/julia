@@ -684,6 +684,34 @@ STATIC_INLINE int copystp(char *dest, const char *src)
     return (int)(d - dest);
 }
 
+// RAI-specific: state for tagging safe-crash-log records emitted during a
+// task-backtrace dump, so a consumer can order records that share a
+// millisecond timestamp and group them by dump.
+//
+// ASSUMPTIONS
+// - SCL-1: a dump is printed serially by one thread. bt_dump_id/bt_dump_line
+//   are therefore thread-local, which scopes tagging to the printing thread
+//   and lets concurrent dumps on other threads keep independent line
+//   sequences under distinct ids. Records emitted by another thread's signal
+//   handler during a dump window are not tagged.
+static _Atomic(int64_t) bt_dump_counter;
+static __thread int64_t bt_dump_id;   // current dump on this thread; 0 = none
+static __thread int64_t bt_dump_line; // record ordinal within current dump
+
+// RAI-specific: begin a dump on the current thread, assigning a unique id and
+// resetting the per-dump line ordinal.
+JL_DLLEXPORT void jl_backtrace_dump_begin(void) JL_NOTSAFEPOINT
+{
+    bt_dump_id = jl_atomic_fetch_add_relaxed(&bt_dump_counter, 1) + 1;
+    bt_dump_line = 0;
+}
+
+// RAI-specific: end the dump on the current thread.
+JL_DLLEXPORT void jl_backtrace_dump_end(void) JL_NOTSAFEPOINT
+{
+    bt_dump_id = 0;
+}
+
 // RAI-specific
 STATIC_INLINE void write_to_safe_crash_log(char *buf) JL_NOTSAFEPOINT
 {
@@ -695,7 +723,11 @@ STATIC_INLINE void write_to_safe_crash_log(char *buf) JL_NOTSAFEPOINT
     // ellipsis if we have to truncate the message leaves `max_b` bytes
     // for the message.
     const int wbuflen = 2048;
-    const int max_b = wbuflen - 70 - 3;
+    // The message budget is an absolute index near the end of wbuf so that a
+    // variable-length preamble (the optional backtrace_id/backtrace_line
+    // fields) does not affect it. Reserve room for the "..." truncation
+    // marker, the closing "\"}\n", and the terminating NUL.
+    const int max_b = wbuflen - 3 /* "..." */ - 3 /* "\"}\n" */ - 1 /* NUL */;
     char wbuf[wbuflen];
     bzero(wbuf, wbuflen);
     int wlen = 0;
@@ -712,8 +744,21 @@ STATIC_INLINE void write_to_safe_crash_log(char *buf) JL_NOTSAFEPOINT
     sprintf(&wbuf[wlen], ".%03ld", (long)tv.tv_usec / 1000);
     wlen += 4;
 
-    // JSON preamble to message (15 bytes)
-    wlen += copystp(&wbuf[wlen], "\", \"message\": \"");
+    // Close the timestamp string.
+    wlen += copystp(&wbuf[wlen], "\"");
+
+    // RAI-specific: tag records emitted during a task-backtrace dump so a
+    // consumer can order records sharing a millisecond timestamp and group
+    // them by dump (SCL-1).
+    if (bt_dump_id != 0) {
+        wlen += sprintf(&wbuf[wlen],
+                        ", \"backtrace_id\": %lld, \"backtrace_line\": %lld",
+                        (long long)bt_dump_id, (long long)bt_dump_line);
+        bt_dump_line++;
+    }
+
+    // JSON preamble to message.
+    wlen += copystp(&wbuf[wlen], ", \"message\": \"");
 
     // Message
     // Each iteration will advance wlen by 1 or 2
