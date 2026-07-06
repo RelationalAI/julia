@@ -26,7 +26,15 @@
 
 ---
 
-### Task 1: Integration test for dump-record tagging
+### Task 1: Integration test for dump-record tagging — SKIPPED
+
+**STATUS: SKIPPED.** The test suite has no precedent for exercising
+`jl_print_task_backtraces`, the heartbeat mechanism, or the safe-crash-log
+path — none of `jl_print_task_backtraces`, `jl_heartbeat*`, or
+`--safe-crash-log-file` appear in `test/`. The full test below is preserved
+as a trace so a reviewer can request it be added; if so, add it and register
+it per Step 2, then it must fail before Task 2 and pass after. Verification of
+Task 2 instead relies on its manual sanity check (Task 2, Step 7).
 
 Write the test first. It drives a Julia subprocess that enables heartbeats,
 stops sending them to force `jl_print_task_backtraces`, recovers, then stalls
