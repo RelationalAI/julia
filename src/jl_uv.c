@@ -693,7 +693,12 @@ STATIC_INLINE int copystp(char *dest, const char *src)
 //   are therefore thread-local, which scopes tagging to the printing thread
 //   and lets concurrent dumps on other threads keep independent line
 //   sequences under distinct ids. Records emitted by another thread's signal
-//   handler during a dump window are not tagged.
+//   handler during a dump window are not tagged. This also requires that a
+//   dump is not reentered on one thread: jl_print_task_backtraces must not be
+//   invoked reentrantly (reachable only via the ccall/JL_DLLEXPORT surface,
+//   e.g., a signal handler on the dumping thread). A nested
+//   jl_backtrace_dump_end would zero bt_dump_id, leaving the outer dump's
+//   remaining records untagged and its line sequence truncated.
 static _Atomic(int64_t) bt_dump_counter;
 static __thread int64_t bt_dump_id;   // current dump on this thread; 0 = none
 static __thread int64_t bt_dump_line; // record ordinal within current dump
@@ -706,7 +711,8 @@ JL_DLLEXPORT void jl_backtrace_dump_begin(void) JL_NOTSAFEPOINT
     bt_dump_line = 0;
 }
 
-// RAI-specific: end the dump on the current thread.
+// RAI-specific: end the dump on the current thread. Not reentrancy-safe on a
+// single thread; see SCL-1.
 JL_DLLEXPORT void jl_backtrace_dump_end(void) JL_NOTSAFEPOINT
 {
     bt_dump_id = 0;
@@ -763,8 +769,10 @@ STATIC_INLINE void write_to_safe_crash_log(char *buf) JL_NOTSAFEPOINT
     // Message
     // Each iteration will advance wlen by 1 or 2
     for (size_t i = 0; i < buflen; i++) {
-        // Truncate the message if the write buffer is full
-        if (wlen == max_b || wlen == max_b - 1) {
+        // Truncate the message if the write buffer is full. Use >= (not ==)
+        // so the guard stays correct if the preamble ever grows and wlen can
+        // enter this loop closer to max_b.
+        if (wlen >= max_b - 1) {
             wlen += copystp(&wbuf[wlen], "...");
             break;
         }
