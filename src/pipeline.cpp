@@ -465,6 +465,19 @@ static void buildScalarOptimizerPipeline(FunctionPassManager &FPM, PassBuilder *
             FPM.addPass(IRCEPass());
             FPM.addPass(InstCombinePass());
             FPM.addPass(JumpThreadingPass());
+        } else if (O.getSpeedupLevel() >= 1) {
+            // RAI: backport of the -O1 branch added upstream by JuliaLang/julia#52850,
+            // which was carried to release-1.10 (#57731) and release-1.11 (#57732) but
+            // never to release-1.12. Without AllocOptPass here, a non-escaping Ref that
+            // is only used via pointer_from_objref is heap-allocated at -O1, while it is
+            // elided on 1.10/1.11 and at -O2+ on every version. Our test suite runs at
+            // -O1 and asserts such code is allocation-free.
+            JULIA_PASS(FPM.addPass(AllocOptPass()));
+            FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+            FPM.addPass(MemCpyOptPass());
+            FPM.addPass(SCCPPass());
+            FPM.addPass(InstCombinePass());
+            FPM.addPass(ADCEPass());
         }
         if (O.getSpeedupLevel() >= 3) {
             FPM.addPass(GVNPass());
