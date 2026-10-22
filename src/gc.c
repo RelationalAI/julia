@@ -2499,15 +2499,19 @@ STATIC_INLINE void gc_mark_chunk(jl_ptls_t ptls, jl_gc_markqueue_t *mq, jl_gc_ch
 }
 
 // Mark gc frame
-STATIC_INLINE void gc_mark_stack(jl_ptls_t ptls, jl_gcframe_t *s, uint32_t nroots, uintptr_t offset,
+// `nroots` must not be narrowed: `jl_gc_run_finalizers_in_list` roots the
+// whole list of pending finalizers (two entries each) with a single frame,
+// which can hold more than 2^30 roots, i.e. an encoded `nroots` that does not
+// fit in 32 bits.
+STATIC_INLINE void gc_mark_stack(jl_ptls_t ptls, jl_gcframe_t *s, uintptr_t nroots, uintptr_t offset,
                    uintptr_t lb, uintptr_t ub) JL_NOTSAFEPOINT
 {
     jl_gc_markqueue_t *mq = &ptls->gc_tls.mark_queue;
     jl_value_t *new_obj;
-    uint32_t nr = nroots >> 2;
+    size_t nr = nroots >> 2;
     while (1) {
         jl_value_t ***rts = (jl_value_t ***)(((void **)s) + 2);
-        for (uint32_t i = 0; i < nr; i++) {
+        for (size_t i = 0; i < nr; i++) {
             if (nroots & 1) {
                 void **slot = (void **)gc_read_stack(&rts[i], offset, lb, ub);
                 new_obj = (jl_value_t *)gc_read_stack(slot, offset, lb, ub);
@@ -2537,9 +2541,7 @@ STATIC_INLINE void gc_mark_stack(jl_ptls_t ptls, jl_gcframe_t *s, uint32_t nroot
             break;
         gc_heap_snapshot_record_frame_to_frame_edge(s, sprev);
         s = sprev;
-        uintptr_t new_nroots = gc_read_stack(&s->nroots, offset, lb, ub);
-        assert(new_nroots <= UINT32_MAX);
-        nroots = (uint32_t)new_nroots;
+        nroots = gc_read_stack(&s->nroots, offset, lb, ub);
         nr = nroots >> 2;
     }
 }
@@ -2756,8 +2758,7 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
                 if (s != NULL) {
                     nroots = gc_read_stack(&s->nroots, offset, lb, ub);
                     gc_heap_snapshot_record_task_to_frame_edge(ta, s);
-                    assert(nroots <= UINT32_MAX);
-                    gc_mark_stack(ptls, s, (uint32_t)nroots, offset, lb, ub);
+                    gc_mark_stack(ptls, s, nroots, offset, lb, ub);
                 }
                 if (ta->excstack) {
                     jl_excstack_t *excstack = ta->excstack;
