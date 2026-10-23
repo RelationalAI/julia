@@ -2503,6 +2503,18 @@ STATIC_INLINE void gc_mark_chunk(jl_ptls_t ptls, jl_gc_markqueue_t *mq, jl_gc_ch
 // whole list of pending finalizers (two entries each) with a single frame,
 // which can hold more than 2^30 roots, i.e. an encoded `nroots` that does not
 // fit in 32 bits.
+//
+// Frames with more than `GC_CHUNK_BATCH_SIZE` direct roots are marked in
+// chunks with `gc_mark_finlist_` rather than by pushing every root onto the
+// mark queue at once: the queue's capacity is an `int32_t`, so a frame with
+// more than 2^30 roots would overflow it.
+//
+// ASSUMPTIONS:
+// - GCFRAME-1: direct frames with more than `GC_CHUNK_BATCH_SIZE` roots hold
+//   lists of pending finalizers (`jl_gc_push_arraylist`) or interpreter slots,
+//   i.e. object pointers, NULL, or tagged finalizer-list entries, which
+//   `gc_mark_finlist_` decodes like the loop below. Large argument splats do
+//   not create such frames (`do_apply` moves them to a heap `svec`).
 STATIC_INLINE void gc_mark_stack(jl_ptls_t ptls, jl_gcframe_t *s, uintptr_t nroots, uintptr_t offset,
                    uintptr_t lb, uintptr_t ub) JL_NOTSAFEPOINT
 {
@@ -2511,6 +2523,13 @@ STATIC_INLINE void gc_mark_stack(jl_ptls_t ptls, jl_gcframe_t *s, uintptr_t nroo
     size_t nr = nroots >> 2;
     while (1) {
         jl_value_t ***rts = (jl_value_t ***)(((void **)s) + 2);
+        if (!(nroots & 1) && nr > GC_CHUNK_BATCH_SIZE) {
+            // The roots are contiguous, so translating the first address
+            // translates the whole range (see `gc_get_stack_addr`).
+            jl_value_t **begin = (jl_value_t **)gc_get_stack_addr(rts, offset, lb, ub);
+            gc_mark_finlist_(mq, NULL, begin, begin + nr);
+            nr = 0;
+        }
         for (size_t i = 0; i < nr; i++) {
             if (nroots & 1) {
                 void **slot = (void **)gc_read_stack(&rts[i], offset, lb, ub);
