@@ -948,6 +948,9 @@ void jl_fprint_bt_entry_codeloc(ios_t *s, int sig, jl_bt_element_t *bt_entry) JL
     if (jl_get_current_task()) {
         snprintf(pre_str, 64, "%sthread (%d) ", sig_str, jl_threadid() + 1);
     }
+    else {
+        snprintf(pre_str, 64, "%s", sig_str);
+    }
 
     if (jl_bt_is_native(bt_entry)) {
         jl_fprint_native_codeloc(s, pre_str, bt_entry[0].uintptr);
