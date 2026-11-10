@@ -1233,7 +1233,7 @@ static void *signal_listener(void *arg)
             jl_safe_printf("\nsignal (%d): %s\n", sig, strsignal(sig));
             size_t i;
             for (i = 0; i < signal_bt_size; i += jl_bt_entry_size(signal_bt_data + i)) {
-                jl_fprint_bt_entry_codeloc(ios_safe_stderr, -1, signal_bt_data + i);
+                jl_fprint_bt_entry_codeloc(ios_safe_stderr, sig, signal_bt_data + i);
             }
             jl_safe_printf("\n");
             // Enable trace compilation to stderr with timing during profile collection
