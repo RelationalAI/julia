@@ -1731,7 +1731,12 @@ JL_DLLEXPORT void jl_fprint_task_backtraces(ios_t *s, int show_done) JL_NOTSAFEP
                 jl_safe_fprintf(s, "thread (%d)          (sticky: %d, started: %d, state: %d, tid: %d)\n", ctid,
                         t->sticky, t->ctx.started, t_state,
                         jl_atomic_load_relaxed(&t->tid) + 1);
-                jl_fprint_backtracet(s, t);
+                if (t->ctx.stkbuf != NULL) {
+                    jl_fprint_backtracet(s, t);
+                }
+                else {
+                    jl_safe_fprintf(s, "thread (%d)      no stack\n", ctid);
+                }
             }
             jl_safe_fprintf(s, "thread (%d)     ---- End root task\n", ctid);
         }
@@ -1748,7 +1753,10 @@ JL_DLLEXPORT void jl_fprint_task_backtraces(ios_t *s, int show_done) JL_NOTSAFEP
             jl_safe_fprintf(s, "thread (%d)          (sticky: %d, started: %d, state: %d, tid: %d)\n", ctid,
                     t->sticky, t->ctx.started, t_state,
                     jl_atomic_load_relaxed(&t->tid) + 1);
-            jl_fprint_backtracet(s, t);
+            if (t->ctx.stkbuf != NULL)
+                jl_fprint_backtracet(s, t);
+            else
+                jl_safe_fprintf(s, "thread (%d)      no stack\n", ctid);
             jl_safe_fprintf(s, "thread (%d)     ---- End task %zu\n", ctid, j + 1);
         }
         jl_safe_fprintf(s, "thread (%d) ==== End thread %d\n", ctid, ptls2->tid + 1);
