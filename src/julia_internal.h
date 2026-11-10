@@ -854,11 +854,13 @@ STATIC_INLINE int jl_inside_signal_handler(void)
     __asm__ __volatile__("mov %0, sp" : "=r"(sp));
 #endif
     // Check if the stack pointer is within the signal stack
-    jl_ptls_t ptls = jl_current_task->ptls;
-    char *stk = (char*)ptls->signal_stack;
+    jl_task_t *ct = jl_get_current_task();
+    if (ct == NULL || ct->ptls == NULL)
+        return 0;
+    char *stk = (char*)ct->ptls->signal_stack;
     if (stk == NULL)
         return 0;
-    size_t ssize = ptls->signal_stack_size ? ptls->signal_stack_size : sig_stack_size;
+    size_t ssize = ct->ptls->signal_stack_size ? ct->ptls->signal_stack_size : sig_stack_size;
     // One guard page for signal_stack.
     return (char*)sp >= stk - jl_page_size && (char*)sp <= stk + ssize;
 #else
