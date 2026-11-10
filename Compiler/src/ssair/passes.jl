@@ -1788,10 +1788,15 @@ function sroa_mutables!(ir::IRCode, defuses::IdDict{Int,Tuple{SPCSet,SSADefUse}}
         # show up in the nuses_total count.
         nleaves = length(defuse.uses) + length(defuse.defs)
         nuses = 0
+        nintermediaries = 0
         for iidx in intermediaries
+            # An intermediary that DCE already deleted no longer contributes its own use
+            # to `used_ssas[defidx]`, so it must not be subtracted again below.
+            ir[SSAValue(iidx)][:stmt] === nothing && continue
             nuses += used_ssas[iidx]
+            nintermediaries += 1
         end
-        nuses_total = used_ssas[defidx] + nuses - length(intermediaries)
+        nuses_total = used_ssas[defidx] + nuses - nintermediaries
         all_eliminated = all_forwarded = true
         if nleaves ≠ nuses_total
             finalizer_useidx = find_finalizer_useidx(defuse)
