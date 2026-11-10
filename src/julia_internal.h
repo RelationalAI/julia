@@ -1586,8 +1586,8 @@ void jl_fprint_critical_error(ios_t *t, int sig, int si_code, bt_context_t *cont
 JL_DLLEXPORT void jl_raise_debugger(void) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_gdblookup(void* ip) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT;
-void jl_fprint_native_codeloc(ios_t *s, uintptr_t ip) JL_NOTSAFEPOINT;
-void jl_fprint_bt_entry_codeloc(ios_t *s, jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
+void jl_fprint_native_codeloc(ios_t *s, const char *pre_str, uintptr_t ip) JL_NOTSAFEPOINT;
+void jl_fprint_bt_entry_codeloc(ios_t *s, int sig, jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
 void jl_thread_resume(int tid) JL_NOTSAFEPOINT;
 int jl_thread_suspend(int16_t tid, bt_context_t *ctx) JL_NOTSAFEPOINT;
 

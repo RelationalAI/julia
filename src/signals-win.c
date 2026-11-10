@@ -361,7 +361,7 @@ LONG WINAPI jl_exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo)
         jl_safe_fprintf(&summary, "UNKNOWN"); break;
     }
     jl_safe_fprintf(&summary, " at 0x%zx -- ", (size_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
-    jl_fprint_native_codeloc(&summary, (uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
+    jl_fprint_native_codeloc(&summary, "", (uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
     ios_write(&full_error, summary.buf, ios_pos(&summary));
     ios_puts("\nSee Application log in Event Viewer for more information.\n", &summary);
 
