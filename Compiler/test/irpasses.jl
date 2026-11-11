@@ -2159,6 +2159,17 @@ let src = code_typed1((Vector{Any},)) do xs
     @test count(iscall((src, Core.svec)), src.code) == 1
 end
 
+# A tuple that is too long for the inliner to unroll (`max_tuple_splat`) must not be expanded
+# into one `getfield` per element either: recursion over `Base.tail` is quadratic otherwise.
+let src = code_typed1(Base.tail, (NTuple{40,Vector{Int}},))
+    @test count(iscall((src, Core._apply_iterate)), src.code) == 1
+    @test count(iscall((src, Core.svec)), src.code) == 0
+    @test count(iscall((src, getfield)), src.code) == 0
+end
+let src = code_typed1(Base.tail, (NTuple{32,Vector{Int}},))
+    @test count(iscall((src, Core._apply_iterate)), src.code) == 0
+end
+
 # Negative NewSSAValue ids must be preserved during compaction
 function f_57827(op, init, x)
     v = op(init, x)

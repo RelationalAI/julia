@@ -880,6 +880,8 @@ function perform_lifting!(compact::IncrementalCompact,
     return Pair{Any, PhiNest}(stmt_val, PhiNest(visited_philikes, lifted_philikes, lifted_leaves, reverse_mapping, walker_callback))
 end
 
+const MAX_LIFTED_APPLY_TUPLE_LENGTH = 32 # same as the default `max_tuple_splat`
+
 # Handle _apply_iterate calls: convert arguments to use `Core.svec`.
 # The behavior of `Core.svec` (with boxing) better matches the ABI of codegen.
 function lift_apply_args!(compact::IncrementalCompact, idx::Int, stmt::Expr)
@@ -898,7 +900,10 @@ function lift_apply_args!(compact::IncrementalCompact, idx::Int, stmt::Expr)
             if svec_args === nothing
                 # Fallback path: generate getfield calls for tuple elements
                 tuple_length = length(arg_type.parameters)
-                if tuple_length > 0 && !isvarargtype(arg_type.parameters[tuple_length])
+                # Longer tuples were deliberately not unrolled by the inliner (`max_tuple_splat`).
+                # Expanding them here costs one statement per element and call.
+                if 0 < tuple_length <= MAX_LIFTED_APPLY_TUPLE_LENGTH &&
+                        !isvarargtype(arg_type.parameters[tuple_length])
                     svec_args = Vector{Any}(undef, tuple_length + 1)
                     for j in 1:tuple_length
                         getfield_call = Expr(:call, GlobalRef(Core, :getfield), arg, j)
