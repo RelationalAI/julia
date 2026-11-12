@@ -2424,6 +2424,10 @@ struct _typename_add_backedge {
     jl_value_t *caller;
 };
 
+// How many of the most recent backedges of a type name are checked for an equal type object
+// to share when a new backedge is added.
+#define MAX_BACKEDGE_TYPE_REUSE_SCAN 32
+
 static void _typename_add_backedge(jl_typename_t *tn, int explct, void *env0)
 {
     struct _typename_add_backedge *env = (struct _typename_add_backedge*)env0;
@@ -2457,10 +2461,13 @@ static void _typename_add_backedge(jl_typename_t *tn, int explct, void *env0)
             }
         }
     }
-    for (i = 1; i < l; i += 2) {
-        if (jl_array_ptr_ref(backedges, i) != env->caller) {
-            if (jl_types_equal(jl_array_ptr_ref(backedges, i - 1), env->typ)) {
-                env->typ = jl_array_ptr_ref(backedges, i - 1);
+    // Only look at the most recent entries: comparing against the whole list makes adding n
+    // edges for one type name quadratic, which dominates loading a large package image.
+    size_t scanned = 0;
+    for (i = l; i >= 2 && scanned < MAX_BACKEDGE_TYPE_REUSE_SCAN; i -= 2, scanned++) {
+        if (jl_array_ptr_ref(backedges, i - 1) != env->caller) {
+            if (jl_types_equal(jl_array_ptr_ref(backedges, i - 2), env->typ)) {
+                env->typ = jl_array_ptr_ref(backedges, i - 2);
                 break;
             }
         }
