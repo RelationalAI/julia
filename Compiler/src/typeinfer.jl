@@ -1577,6 +1577,11 @@ function add_codeinsts_to_jit!(interp::AbstractInterpreter, ci, source_mode::UIn
     codegen === nothing && return ci
     workqueue = CompilationQueue(; interp)
     push!(workqueue, ci)
+    # Resolve every source first (this may run inference) and only then hand the code to the
+    # JIT, callees before callers. Once a caller is in the JIT, another thread that needs it
+    # completes it at once, and every callee that is not in the JIT yet is then called
+    # through a stub that boxes its arguments, for good.
+    toadd = Any[]
     while !isempty(workqueue)
         # ci_has_real_invoke(ci) && return ci # optimization: cease looping if ci happens to get compiled (not just jl_fptr_wait_for_compiled, but fully jl_is_compiled_codeinst)
         callee = pop!(workqueue)
@@ -1615,7 +1620,11 @@ function add_codeinsts_to_jit!(interp::AbstractInterpreter, ci, source_mode::UIn
                 callee = cached
             end
         end
-        ccall(:jl_add_codeinst_to_jit, Cvoid, (Any, Any), callee, src)
+        push!(toadd, callee)
+        push!(toadd, src)
+    end
+    for i in length(toadd):-2:2
+        ccall(:jl_add_codeinst_to_jit, Cvoid, (Any, Any), toadd[i-1], toadd[i])
     end
     return ci
 end
