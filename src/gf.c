@@ -134,25 +134,41 @@ static int8_t jl_cachearg_offset(void)
 /// ----- Insertion logic for special entries ----- ///
 
 
-// A hash for types that have no cached hash (they contain free type variables). It only looks
-// at the type names and at the cached hashes of the parameters, down to a fixed depth, so that
-// types that are equal up to the names of their type variables get the same value.
+// A hash for types that have no cached hash (they contain a Union, a UnionAll or a free type
+// variable). It combines the type names and the cached hashes of the parameters, down to a
+// fixed depth. It does not depend on the names of type variables or on the order of the
+// members of a Union.
 static uint_t spec_weak_type_hash(jl_value_t *t, int depth) JL_NOTSAFEPOINT
 {
     if (jl_is_unionall(t))
         t = jl_unwrap_unionall(t);
-    if (!jl_is_datatype(t))
-        return 0x5eed;
-    jl_datatype_t *dt = (jl_datatype_t*)t;
-    if (dt->hash)
-        return dt->hash;
-    uint_t h = dt->name->hash;
-    if (depth > 0) {
-        size_t i, l = jl_nparams(dt);
-        for (i = 0; i < l; i++)
-            h = bitmix(h, spec_weak_type_hash(jl_tparam(dt, i), depth - 1));
+    if (jl_is_datatype(t)) {
+        jl_datatype_t *dt = (jl_datatype_t*)t;
+        if (dt->hash)
+            return dt->hash;
+        uint_t h = dt->name->hash;
+        if (depth > 0) {
+            size_t i, l = jl_nparams(dt);
+            for (i = 0; i < l; i++)
+                h = bitmix(h, spec_weak_type_hash(jl_tparam(dt, i), depth - 1));
+        }
+        return h;
     }
-    return h;
+    if (depth <= 0)
+        return 0x5eed;
+    if (jl_is_uniontype(t)) {
+        jl_uniontype_t *u = (jl_uniontype_t*)t;
+        return 0x756e + spec_weak_type_hash(u->a, depth - 1) + spec_weak_type_hash(u->b, depth - 1);
+    }
+    if (jl_is_typevar(t))
+        return bitmix(0x7476, spec_weak_type_hash(((jl_tvar_t*)t)->ub, depth - 1));
+    if (jl_is_vararg(t)) {
+        jl_value_t *vt = ((jl_vararg_t*)t)->T;
+        return bitmix(0x7661, vt ? spec_weak_type_hash(vt, depth - 1) : 0);
+    }
+    if (jl_is_symbol(t))
+        return ((jl_sym_t*)t)->hash;
+    return 0x5eed;
 }
 
 // The key of a specialization signature in `speckeyset`: the cached hash of the signature if it
@@ -164,7 +180,7 @@ static uint_t spec_sig_hash(jl_value_t *sig) JL_NOTSAFEPOINT
     uint_t h = ((jl_datatype_t*)sig)->hash;
     if (h)
         return h;
-    h = spec_weak_type_hash(sig, 3);
+    h = spec_weak_type_hash(sig, 4);
     return h ? h : 1;
 }
 
@@ -223,9 +239,14 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
             continue;
         }
         cl = jl_svec_len(specializations);
+        // comparing signatures without a cached hash can reach a safepoint, and another thread
+        // may replace `specializations` meanwhile
+        JL_GC_PUSH1(&specializations);
         ssize_t idx = jl_smallintset_lookup(speckeyset, speccache_eq, type, specializations, hv, 0);
-        if (idx != -1) {
-            jl_method_instance_t *mi = (jl_method_instance_t*)jl_svecref(specializations, idx);
+        jl_method_instance_t *found = idx != -1 ? (jl_method_instance_t*)jl_svecref(specializations, idx) : NULL;
+        JL_GC_POP();
+        if (found != NULL) {
+            jl_method_instance_t *mi = found;
             if (locked)
                 JL_UNLOCK(&m->writelock);
             return mi;
