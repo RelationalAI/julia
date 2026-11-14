@@ -30,7 +30,9 @@ struct jl_internal_global internal_global;
 #endif
 
 // compute empirical max-probe for a given size
-#define max_probe(size) ((size) <= 1024 ? 16 : (size) >> 6)
+// The table grows only when an insert needs more than this many probes. Without the cap a
+// large table fills to about 95% before that happens, and lookups walk long runs.
+#define max_probe(size) ((size) <= 1024 ? 16 : (size) <= 4096 ? (size) >> 6 : 64)
 #define h2index(hv, sz) (size_t)((hv) & ((sz)-1))
 
 // --- type properties and predicates ---
