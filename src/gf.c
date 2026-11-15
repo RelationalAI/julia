@@ -124,6 +124,14 @@ void jl_call_tracer(tracer_cb callback, jl_value_t *tracee)
     }
 }
 
+// Returns 1 the first time it is called in a process. `Compiler.ReinferUtils` uses it to drop a
+// lookup cache that was saved into a system image.
+JL_DLLEXPORT int jl_reinfer_cache_first_use(void)
+{
+    static _Atomic(int) used = 0;
+    return !jl_atomic_exchange(&used, 1);
+}
+
 /// ----- Definitions for various internal TypeMaps ----- ///
 
 static int8_t jl_cachearg_offset(void)

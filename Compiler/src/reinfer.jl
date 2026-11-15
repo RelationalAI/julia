@@ -33,6 +33,15 @@ struct VerifyMethodResultState
     result_maxworld::UInt
 end
 
+# The result of `_methods_by_ftype(sig, nothing, lim, world, ...)` for one signature
+struct VerifyCallLookup
+    lim::Int
+    world::UInt
+    result::Union{Nothing,Vector{Any}}
+    minworld::UInt
+    maxworld::UInt
+end
+
 # Container for all the work arrays
 struct VerifyMethodWorkspace
     # Arrays of different state categories
@@ -48,6 +57,28 @@ struct VerifyMethodWorkspace
         new(VerifyMethodInitialState[], VerifyMethodWorkState[], VerifyMethodResultState[],
             CodeInstance[], IdDict{CodeInstance,Int}())
     end
+end
+
+# The lookups stay valid for as long as no method is added or deleted, that is, while the world
+# counter does not change. Then they can be shared between the images loaded in that time.
+# Checked on every use. A cache that was saved into a system image is dropped on its first use
+# in a process. Image loading is serialized (the require lock), which this relies on.
+const VERIFY_CALL_CACHE = IdDict{Any,VerifyCallLookup}()
+const VERIFY_CALL_CACHE_WORLD = RefValue{UInt}(0)
+function verify_call_cache()
+    world = get_world_counter()
+    first_use = ccall(:jl_reinfer_cache_first_use, Cint, ()) != 0
+    if first_use || VERIFY_CALL_CACHE_WORLD[] != world
+        empty!(VERIFY_CALL_CACHE)
+        VERIFY_CALL_CACHE_WORLD[] = world
+    end
+    return VERIFY_CALL_CACHE
+end
+
+# Frees the cache, for callers that know they are done loading images for now.
+function empty_verify_call_cache!()
+    empty!(VERIFY_CALL_CACHE)
+    return nothing
 end
 
 # Helper functions to create default states
@@ -573,7 +604,21 @@ function verify_call(@nospecialize(sig), expecteds::Core.SimpleVector, i::Int, n
     minworld = RefValue{UInt}(1)
     maxworld = RefValue{UInt}(typemax(UInt))
     has_ambig = RefValue{Int32}(0)
-    result = _methods_by_ftype(sig, nothing, lim, world, #=ambig=#false, minworld, maxworld, has_ambig)
+    # Without invalidation logging the lookup result is only read below, so it can be shared
+    # between the edges with this signature.
+    use_cache = _jl_debug_method_invalidation[] === nothing
+    call_cache = verify_call_cache()
+    cached = use_cache ? get(call_cache, sig, nothing) : nothing
+    if cached !== nothing && cached.lim == lim && cached.world == world
+        result = cached.result
+        minworld[] = cached.minworld
+        maxworld[] = cached.maxworld
+    else
+        result = _methods_by_ftype(sig, nothing, lim, world, #=ambig=#false, minworld, maxworld, has_ambig)
+        if use_cache
+            call_cache[sig] = VerifyCallLookup(lim, world, result, minworld[], maxworld[])
+        end
+    end
     if result === nothing
         empty!(matches)
         maxworld[] = 0
