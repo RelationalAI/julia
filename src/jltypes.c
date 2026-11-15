@@ -1810,6 +1810,14 @@ JL_DLLEXPORT uintptr_t jl_type_hash(jl_value_t *v) JL_NOTSAFEPOINT
     return type_hash(v, &failed);
 }
 
+// Like `jl_type_hash`, but also computes a hash for types that have no cached one (they
+// contain a Union or a type variable). Equal types get equal values.
+uintptr_t jl_type_hash_nofail(jl_value_t *v) JL_NOTSAFEPOINT
+{
+    int failed = 1;
+    return type_hash(v, &failed);
+}
+
 static unsigned typekey_hash(jl_typename_t *tn, jl_value_t **key, size_t n, int nofail) JL_NOTSAFEPOINT
 {
     if (tn == jl_type_typename && key[0] == jl_bottom_type)

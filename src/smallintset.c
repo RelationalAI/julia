@@ -219,7 +219,8 @@ void jl_smallintset_insert(_Atomic(jl_genericmemory_t*) *pcache, jl_value_t *par
             newsz = HT_N_INLINE;
         else
             newsz = r < 0 ? sz : sz << 1;
-        a = smallintset_rehash(a, hash, data, newsz, 0);
+        // size the element type for `val` too: it can be the first and largest entry
+        a = smallintset_rehash(a, hash, data, newsz, val + 1);
         jl_atomic_store_release(pcache, a);
         if (parent) jl_gc_wb(parent, a);
     }
