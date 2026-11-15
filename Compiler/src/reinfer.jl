@@ -33,6 +33,17 @@ struct VerifyMethodResultState
     result_maxworld::UInt
 end
 
+const VERIFY_CALL_STATS = [0, 0, 0]
+
+# The result of `_methods_by_ftype(sig, nothing, lim, world, ...)` for one signature
+struct VerifyCallLookup
+    lim::Int
+    world::UInt
+    result::Union{Nothing,Vector{Any}}
+    minworld::UInt
+    maxworld::UInt
+end
+
 # Container for all the work arrays
 struct VerifyMethodWorkspace
     # Arrays of different state categories
@@ -44,10 +55,28 @@ struct VerifyMethodWorkspace
     stack::Vector{CodeInstance}
     visiting::IdDict{CodeInstance,Int}
 
+    # Results of the method lookups done by `verify_call`, by call signature. Many code
+    # instances of one image have edges with the same signature.
+    call_cache::IdDict{Any,VerifyCallLookup}
+
     function VerifyMethodWorkspace()
         new(VerifyMethodInitialState[], VerifyMethodWorkState[], VerifyMethodResultState[],
-            CodeInstance[], IdDict{CodeInstance,Int}())
+            CodeInstance[], IdDict{CodeInstance,Int}(), verify_call_cache())
     end
+end
+
+# The lookups stay valid for as long as no method is added or deleted, that is, while the world
+# counter does not change. Then they can be shared between the images loaded in that time.
+const VERIFY_CALL_CACHE = IdDict{Any,VerifyCallLookup}()
+const VERIFY_CALL_CACHE_WORLD = RefValue{UInt}(0)
+function verify_call_cache()
+    world = get_world_counter()
+    if VERIFY_CALL_CACHE_WORLD[] != world
+        empty!(VERIFY_CALL_CACHE)
+        VERIFY_CALL_CACHE_WORLD[] = world
+        VERIFY_CALL_STATS[3] += 1
+    end
+    return VERIFY_CALL_CACHE
 end
 
 # Helper functions to create default states
@@ -230,13 +259,13 @@ function verify_method(codeinst::CodeInstance, validation_world::UInt, workspace
 
                     if edge isa MethodInstance
                         sig = edge.specTypes
-                        min_valid2, max_valid2 = verify_call(sig, initial.callees, j, 1, world, true, matches)
+                        min_valid2, max_valid2 = verify_call(sig, initial.callees, j, 1, world, true, matches, workspace.call_cache)
                         j += 1
                     elseif edge isa Int
                         sig = initial.callees[j+1]
                         nmatches = abs(edge)
                         fully_covers = edge > 0
-                        min_valid2, max_valid2 = verify_call(sig, initial.callees, j+2, nmatches, world, fully_covers, matches)
+                        min_valid2, max_valid2 = verify_call(sig, initial.callees, j+2, nmatches, world, fully_covers, matches, workspace.call_cache)
                         j += 2 + nmatches
                         edge = sig
                     elseif edge isa Core.Binding
@@ -466,7 +495,7 @@ function method_morespecific_via_interferences(method1::Method, method2::Method)
     return false
 end
 
-function verify_call(@nospecialize(sig), expecteds::Core.SimpleVector, i::Int, n::Int, world::UInt, fully_covers::Bool, matches::Vector{Any})
+function verify_call(@nospecialize(sig), expecteds::Core.SimpleVector, i::Int, n::Int, world::UInt, fully_covers::Bool, matches::Vector{Any}, call_cache::IdDict{Any,VerifyCallLookup})
     # verify that these edges intersect with the same methods as before
     mi = nothing
     expected_deleted = false
@@ -573,7 +602,22 @@ function verify_call(@nospecialize(sig), expecteds::Core.SimpleVector, i::Int, n
     minworld = RefValue{UInt}(1)
     maxworld = RefValue{UInt}(typemax(UInt))
     has_ambig = RefValue{Int32}(0)
-    result = _methods_by_ftype(sig, nothing, lim, world, #=ambig=#false, minworld, maxworld, has_ambig)
+    # Without invalidation logging the lookup result is only read below, so it can be shared
+    # between the edges with this signature.
+    use_cache = _jl_debug_method_invalidation[] === nothing
+    cached = use_cache ? get(call_cache, sig, nothing) : nothing
+    if cached !== nothing && cached.lim == lim && cached.world == world
+        result = cached.result
+        minworld[] = cached.minworld
+        maxworld[] = cached.maxworld
+        VERIFY_CALL_STATS[1] += 1
+    else
+        result = _methods_by_ftype(sig, nothing, lim, world, #=ambig=#false, minworld, maxworld, has_ambig)
+        if use_cache
+            call_cache[sig] = VerifyCallLookup(lim, world, result, minworld[], maxworld[])
+        end
+        VERIFY_CALL_STATS[2] += 1
+    end
     if result === nothing
         empty!(matches)
         maxworld[] = 0
