@@ -33,8 +33,6 @@ struct VerifyMethodResultState
     result_maxworld::UInt
 end
 
-const VERIFY_CALL_STATS = [0, 0, 0]
-
 # The result of `_methods_by_ftype(sig, nothing, lim, world, ...)` for one signature
 struct VerifyCallLookup
     lim::Int
@@ -67,14 +65,17 @@ end
 
 # The lookups stay valid for as long as no method is added or deleted, that is, while the world
 # counter does not change. Then they can be shared between the images loaded in that time.
+# The process id keeps a cache that was saved into a system image from being used.
 const VERIFY_CALL_CACHE = IdDict{Any,VerifyCallLookup}()
 const VERIFY_CALL_CACHE_WORLD = RefValue{UInt}(0)
+const VERIFY_CALL_CACHE_PID = RefValue{Cint}(0)
 function verify_call_cache()
     world = get_world_counter()
-    if VERIFY_CALL_CACHE_WORLD[] != world
+    pid = ccall(:getpid, Cint, ())
+    if VERIFY_CALL_CACHE_WORLD[] != world || VERIFY_CALL_CACHE_PID[] != pid
         empty!(VERIFY_CALL_CACHE)
         VERIFY_CALL_CACHE_WORLD[] = world
-        VERIFY_CALL_STATS[3] += 1
+        VERIFY_CALL_CACHE_PID[] = pid
     end
     return VERIFY_CALL_CACHE
 end
@@ -610,13 +611,11 @@ function verify_call(@nospecialize(sig), expecteds::Core.SimpleVector, i::Int, n
         result = cached.result
         minworld[] = cached.minworld
         maxworld[] = cached.maxworld
-        VERIFY_CALL_STATS[1] += 1
     else
         result = _methods_by_ftype(sig, nothing, lim, world, #=ambig=#false, minworld, maxworld, has_ambig)
         if use_cache
             call_cache[sig] = VerifyCallLookup(lim, world, result, minworld[], maxworld[])
         end
-        VERIFY_CALL_STATS[2] += 1
     end
     if result === nothing
         empty!(matches)
