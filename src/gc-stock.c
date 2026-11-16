@@ -570,15 +570,31 @@ void jl_gc_count_allocd(size_t sz) JL_NOTSAFEPOINT
 }
 
 // Only safe to update the heap inside the GC
+// How many threads allocated since the last collection, counted by their share of the bytes:
+// (sum a_i)^2 / sum a_i^2. One thread that allocates alone gives 1, n threads that allocate the
+// same amount give n. Updated when a collection starts.
+static double gc_alloc_participation = 1.0;
+
+// Experimental: the heap may grow by this many bytes per allocating thread before the next
+// collection, if that is more than the heuristic allows. Set with
+// --heap-target-increment-per-thread or JULIA_HEAP_TARGET_INCREMENT_PER_THREAD; 0 means off.
+static uint64_t gc_heap_target_increment_per_thread = 0;
+
 static void combine_thread_gc_counts(jl_gc_num_t *dest, int update_heap) JL_NOTSAFEPOINT
 {
     int gc_n_threads;
     jl_ptls_t* gc_all_tls_states;
     gc_n_threads = jl_atomic_load_acquire(&jl_n_threads);
     gc_all_tls_states = jl_atomic_load_relaxed(&jl_all_tls_states);
+    double sum_allocd = 0, sum_allocd_sq = 0;
     for (int i = 0; i < gc_n_threads; i++) {
         jl_ptls_t ptls = gc_all_tls_states[i];
         if (ptls) {
+            double thread_allocd = (double)(jl_atomic_load_relaxed(&ptls->gc_tls_common.gc_num.allocd) + (int64_t)gc_num.interval);
+            if (thread_allocd > 0) {
+                sum_allocd += thread_allocd;
+                sum_allocd_sq += thread_allocd * thread_allocd;
+            }
             dest->allocd += (jl_atomic_load_relaxed(&ptls->gc_tls_common.gc_num.allocd) + gc_num.interval);
             dest->malloc += jl_atomic_load_relaxed(&ptls->gc_tls_common.gc_num.malloc);
             dest->realloc += jl_atomic_load_relaxed(&ptls->gc_tls_common.gc_num.realloc);
@@ -594,6 +610,8 @@ static void combine_thread_gc_counts(jl_gc_num_t *dest, int update_heap) JL_NOTS
             }
         }
     }
+    if (update_heap && sum_allocd_sq > 0)
+        gc_alloc_participation = sum_allocd * sum_allocd / sum_allocd_sq;
 }
 
 static void reset_thread_gc_counts(void) JL_NOTSAFEPOINT
@@ -3394,6 +3412,23 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection) JL_NOTS
         target_heap = heap_size + jl_options.heap_target_increment;
         jl_atomic_store_relaxed(&gc_heap_stats.heap_target, target_heap);
     }
+    else if (gc_heap_target_increment_per_thread != 0) {
+        uint64_t mem_limit = max_total_memory;
+#ifdef _P64
+        if (total_mem != 0 && total_mem < mem_limit)
+            mem_limit = total_mem;
+#endif
+        double growth = (double)gc_heap_target_increment_per_thread * gc_alloc_participation;
+        if (growth > (double)(mem_limit / 16))
+            growth = (double)(mem_limit / 16);
+        uint64_t scaled = heap_size + (uint64_t)growth;
+        if (scaled > user_max)
+            scaled = user_max;
+        if (scaled > target_heap) {
+            target_heap = scaled;
+            jl_atomic_store_relaxed(&gc_heap_stats.heap_target, target_heap);
+        }
+    }
     if (sweep_full) {
         // these are the difference between the number of gc-perm bytes scanned
         // on the first collection after sweep_full, and the current scan
@@ -3848,6 +3883,23 @@ void jl_gc_init(void)
             hint = min_heap_size_hint;
         jl_gc_set_max_memory(hint - mem_reserve);
     }
+
+    uint64_t per_thread = jl_options.heap_target_increment_per_thread;
+    const char *per_thread_env = getenv("JULIA_HEAP_TARGET_INCREMENT_PER_THREAD");
+    if (per_thread == 0 && per_thread_env != NULL &&
+        (jl_parse_heap_size(per_thread_env, 0, &per_thread) != 0 || per_thread == 0)) {
+        jl_safe_printf("WARNING: ignoring invalid JULIA_HEAP_TARGET_INCREMENT_PER_THREAD=\"%s\"\n", per_thread_env);
+        per_thread = 0;
+    }
+    if (per_thread != 0 && jl_options.hard_heap_limit != 0) {
+        jl_safe_printf("WARNING: heap target increment per thread is ignored with --hard-heap-limit\n");
+        per_thread = 0;
+    }
+    if (per_thread != 0 && jl_options.heap_target_increment != 0) {
+        jl_safe_printf("WARNING: heap target increment per thread is ignored with --heap-target-increment\n");
+        per_thread = 0;
+    }
+    gc_heap_target_increment_per_thread = per_thread;
 }
 
 JL_DLLEXPORT void jl_gc_set_max_memory(uint64_t max_mem)
