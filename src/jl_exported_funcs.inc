@@ -122,6 +122,7 @@
     XX(jl_exception_occurred) \
     XX(jl_excstack_state) \
     XX(jl_exit) \
+    XX(jl_exit_after_atexit_hook) \
     XX(jl_exit_on_sigint) \
     XX(jl_exit_threaded_region) \
     XX(jl_field_index) \
