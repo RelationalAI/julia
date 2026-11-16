@@ -1151,6 +1151,7 @@ JL_DLLEXPORT int jl_repl_entrypoint(int argc, char *argv[])
     }
     int ret = true_main(argc, (char**)new_argv);
     jl_atexit_hook(ret);
+    jl_exit_after_atexit_hook(ret);
     return ret;
 }
 
