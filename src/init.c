@@ -197,7 +197,16 @@ void jl_task_frame_noreturn(jl_task_t *ct) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_exit(int exitcode)
 {
     jl_atexit_hook(exitcode);
-    exit(exitcode);
+    jl_exit_after_atexit_hook(exitcode);
+}
+
+// Threads that were in a GC-safe region (e.g. compiling) keep running after jl_atexit_hook,
+// and threads parked at a safepoint may hold locks. Running C++ static destructors and
+// library finalizers next to them can deadlock or corrupt the heap, so skip them.
+JL_DLLEXPORT void JL_NORETURN jl_exit_after_atexit_hook(int exitcode)
+{
+    fflush(NULL);
+    _exit(exitcode);
 }
 
 // cause this process to exit with WTERMSIG(signo),
