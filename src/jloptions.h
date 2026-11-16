@@ -66,6 +66,7 @@ typedef struct {
     uint64_t heap_size_hint;
     uint64_t hard_heap_limit;
     uint64_t heap_target_increment;
+    uint64_t heap_target_increment_per_thread;
     int8_t trace_compile_timing;
     int8_t trim;
     int8_t trace_eval;

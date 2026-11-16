@@ -2560,6 +2560,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp);
 JL_DLLEXPORT char *jl_format_filename(const char *output_pattern) JL_NOTSAFEPOINT;
 
 uint64_t parse_heap_size_option(const char *optarg, const char *option_name, int allow_pct);
+int jl_parse_heap_size(const char *str, int allow_pct, uint64_t *out);
 
 // Set julia-level ARGS array according to the arguments provided in
 // argc/argv

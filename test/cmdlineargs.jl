@@ -1445,6 +1445,31 @@ end
     end
 end
 
+@testset "--heap-target-increment-per-thread" begin
+    exename = `$(Base.julia_cmd())`
+    @test errors_not_signals(`$exename --heap-target-increment-per-thread -e "exit(0)"`)
+    @testset "--heap-target-increment-per-thread=$str" for str in ["asdf","","0","-256M","-1","1.2gb2","2GiB","NaNt","1e30T"]
+        @test errors_not_signals(`$exename --heap-target-increment-per-thread=$str -e "exit(0)"`)
+    end
+    m = UInt64(1) << 20
+    @testset "--heap-target-increment-per-thread=$str" for (str, val) in [("512M", 512m), ("0.5G", 512m), ("256 M", 256m)]
+        @test test_read_success(`$exename --heap-target-increment-per-thread=$str -E "Base.JLOptions().heap_target_increment_per_thread"`, UInt64) == val
+    end
+    function stderr_of(cmd)
+        err = IOBuffer()
+        ok = success(pipeline(cmd; stderr=err))
+        return ok, String(take!(err))
+    end
+    @testset "JULIA_HEAP_TARGET_INCREMENT_PER_THREAD=$str" for str in ["abc","","-256M","-1","1e30T"]
+        ok, err = stderr_of(addenv(`$exename --startup-file=no -e "exit(0)"`, "JULIA_HEAP_TARGET_INCREMENT_PER_THREAD" => str))
+        @test ok
+        @test occursin("ignoring invalid JULIA_HEAP_TARGET_INCREMENT_PER_THREAD", err)
+    end
+    ok, err = stderr_of(`$exename --startup-file=no --heap-target-increment-per-thread=512M --hard-heap-limit=4G -e "exit(0)"`)
+    @test ok
+    @test occursin("ignored with --hard-heap-limit", err)
+end
+
 @testset "--timeout-for-safepoint-straggler" begin
     exename = `$(Base.julia_cmd())`
     timeout = 120
