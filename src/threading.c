@@ -1355,7 +1355,13 @@ void jl_heartbeat_threadfun(void *arg)
     // We need a TLS because backtraces are accumulated into ptls->bt_size
     // and ptls->bt_data, so we need to call jl_adopt_thread().
     jl_adopt_thread();
-    (void)jl_atomic_fetch_add_relaxed(&n_threads_running, -1);
+    if (jl_atomic_fetch_add_relaxed(&n_threads_running, -1) == 1) {
+        // jl_task_wait_empty on thread 0 may already be asleep waiting for n_threads_running == 0
+        jl_ptls_t ptls0 = jl_atomic_load_relaxed(&jl_all_tls_states)[0];
+        uv_mutex_lock(&ptls0->sleep_lock);
+        uv_cond_signal(&ptls0->wake_signal);
+        uv_mutex_unlock(&ptls0->sleep_lock);
+    }
     jl_task_t *ct = jl_current_task;
     jl_ptls_t ptls = ct->ptls;
     heartbeat_tid = ptls->tid;
