@@ -95,6 +95,9 @@ struct _jl_image_t {
 // The version of the image format. 2: the layout of Method.specializations that
 // jl_specializations_get_linfo_ expects (indexed entries first), which older images lack.
 #define JL_IMAGE_FORMAT_VERSION 2
+// Marks the serialized data of a system image of that version, which a raw .ji has without
+// the native header
+#define JL_SYSIMG_STREAM_TAG (0x4a4c5300u | JL_IMAGE_FORMAT_VERSION)
 
 // The header for each image
 // Details important counts about the image
