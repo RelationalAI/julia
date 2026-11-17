@@ -3,15 +3,14 @@
 #define hash_size(h) (h->length / 2)
 
 // compute empirical max-probe for a given size
-// An insert whose run reaches no empty slot within this many probes rebuilds the table (growing it
-// unless few keys are live) if at least half of its slots hold keys or deleted entries. Without
-// the cap a large table fills to about 95% before it grows, and lookups walk long runs.
+// An insert that needs more probes than this grows the table, unless it is less than half full.
+// Without the cap a large table fills to about 95% before it grows, and lookups walk long runs.
 #define max_probe(size) ((size) <= 1024 ? 16 : (size) <= 4096 ? (size) >> 6 : 64)
 
 #define keyhash(k) jl_object_id_(jl_typetagof(k), k)
 #define h2index(hv, sz) (size_t)(((hv) & ((sz)-1)) * 2)
 
-static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, jl_value_t *val, int rehashing);
+static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, jl_value_t *val);
 
 JL_DLLEXPORT jl_genericmemory_t *jl_idtable_rehash(jl_genericmemory_t *a, size_t newsz)
 {
@@ -25,14 +24,14 @@ JL_DLLEXPORT jl_genericmemory_t *jl_idtable_rehash(jl_genericmemory_t *a, size_t
     newa = jl_alloc_memory_any(newsz);
     for (i = 0; i < sz; i += 2) {
         if (ol[i + 1] != NULL) {
-            jl_table_assign_bp(&newa, ol[i], ol[i + 1], 1);
+            jl_table_assign_bp(&newa, ol[i], ol[i + 1]);
         }
     }
     JL_GC_POP();
     return newa;
 }
 
-static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, jl_value_t *val, int rehashing)
+static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, jl_value_t *val)
 {
     // pa points to a **un**rooted address
     uint_t hv;
@@ -55,14 +54,15 @@ static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, j
         orig = index;
         empty_slot = -1;
 
-        size_t null_iter = (size_t)-1;
+        size_t empty_iter = 0;
         // Lookups probe until an empty slot, so the key may sit past `maxprobe`.
         do {
             jl_value_t *k2 = jl_atomic_load_relaxed(&tab[index]);
             if (k2 == NULL) {
-                if (empty_slot == -1)
+                if (empty_slot == -1) {
                     empty_slot = index;
-                null_iter = iter;
+                    empty_iter = iter;
+                }
                 break;
             }
             if (jl_egal(key, k2)) {
@@ -73,38 +73,29 @@ static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, j
                 }
                 // `nothing` is our sentinel value for deletion, so need to keep searching if it's also our search key
                 assert(key == jl_nothing);
-                if (empty_slot == -1)
+                if (empty_slot == -1) {
                     empty_slot = index;
+                    empty_iter = iter;
+                }
             }
             if (empty_slot == -1 && jl_atomic_load_relaxed(&tab[index + 1]) == NULL) {
                 assert(jl_atomic_load_relaxed(&tab[index]) == jl_nothing);
                 empty_slot = index;
+                empty_iter = iter;
             }
 
             index = (index + 2) & (sz - 1);
             iter++;
         } while (index != orig);
 
-        // Misses walk to the first empty slot, and deleted entries are not empty. If this run has
-        // none within `maxprobe`, rebuild the table (which drops deleted entries) unless fewer than
-        // half of the slots hold a key or a deleted entry: then the run is keys with equal ids,
-        // which no table size shortens. A rehash fills a new table and skips this check.
-        if (!rehashing && empty_slot != -1 && (null_iter == (size_t)-1 || null_iter > maxprobe)) {
-            size_t occupied = 0, live = 0;
-            for (size_t i = 0; i < sz; i += 2) {
-                if (jl_atomic_load_relaxed(&tab[i]) != NULL) {
-                    occupied++;
-                    live += jl_atomic_load_relaxed(&tab[i + 1]) != NULL;
-                }
-            }
-            if (4 * occupied >= sz) {
-                *pa = jl_idtable_rehash(*pa, 8 * live >= sz ? sz << 1 : sz);
-                a = *pa;
-                tab = (_Atomic(jl_value_t*)*) a->ptr;
-                sz = hash_size(a);
-                maxprobe = max_probe(sz);
-                continue;
-            }
+        // A slot past `maxprobe` is used only while the table is less than half full: keys with
+        // equal ids can form a run longer than any probe limit, which no table size fixes.
+        if (empty_slot != -1 && empty_iter > maxprobe) {
+            size_t used = 0;
+            for (size_t i = 0; i < sz; i += 2)
+                used += jl_atomic_load_relaxed(&tab[i]) != NULL;
+            if (4 * used >= sz)
+                empty_slot = -1;
         }
         if (empty_slot != -1) {
             jl_atomic_store_release(&tab[empty_slot], key);
@@ -167,7 +158,7 @@ inline _Atomic(jl_value_t*) *jl_table_peek_bp(jl_genericmemory_t *a, jl_value_t 
 JL_DLLEXPORT
 jl_genericmemory_t *jl_eqtable_put(jl_genericmemory_t *h, jl_value_t *key, jl_value_t *val, int *p_inserted)
 {
-    int inserted = jl_table_assign_bp(&h, key, val, 0);
+    int inserted = jl_table_assign_bp(&h, key, val);
     if (p_inserted)
         *p_inserted = inserted;
     return h;
