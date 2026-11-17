@@ -3,9 +3,7 @@
 #define hash_size(h) (h->length / 2)
 
 // compute empirical max-probe for a given size
-// An insert that needs more probes than this grows the table, unless it is less than half full.
-// Without the cap a large table fills to about 95% before it grows, and lookups walk long runs.
-#define max_probe(size) ((size) <= 1024 ? 16 : (size) <= 4096 ? (size) >> 6 : 64)
+#define max_probe(size) ((size) <= 1024 ? 16 : (size) >> 6)
 
 #define keyhash(k) jl_object_id_(jl_typetagof(k), k)
 #define h2index(hv, sz) (size_t)(((hv) & ((sz)-1)) * 2)
@@ -54,15 +52,11 @@ static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, j
         orig = index;
         empty_slot = -1;
 
-        size_t empty_iter = 0;
-        // Lookups probe until an empty slot, so the key may sit past `maxprobe`.
         do {
             jl_value_t *k2 = jl_atomic_load_relaxed(&tab[index]);
             if (k2 == NULL) {
-                if (empty_slot == -1) {
+                if (empty_slot == -1)
                     empty_slot = index;
-                    empty_iter = iter;
-                }
                 break;
             }
             if (jl_egal(key, k2)) {
@@ -73,30 +67,18 @@ static inline int jl_table_assign_bp(jl_genericmemory_t **pa, jl_value_t *key, j
                 }
                 // `nothing` is our sentinel value for deletion, so need to keep searching if it's also our search key
                 assert(key == jl_nothing);
-                if (empty_slot == -1) {
+                if (empty_slot == -1)
                     empty_slot = index;
-                    empty_iter = iter;
-                }
             }
             if (empty_slot == -1 && jl_atomic_load_relaxed(&tab[index + 1]) == NULL) {
                 assert(jl_atomic_load_relaxed(&tab[index]) == jl_nothing);
                 empty_slot = index;
-                empty_iter = iter;
             }
 
             index = (index + 2) & (sz - 1);
             iter++;
-        } while (index != orig);
+        } while (iter <= maxprobe && index != orig);
 
-        // A slot past `maxprobe` is used only while the table is less than half full: keys with
-        // equal ids can form a run longer than any probe limit, which no table size fixes.
-        if (empty_slot != -1 && empty_iter > maxprobe) {
-            size_t used = 0;
-            for (size_t i = 0; i < sz; i += 2)
-                used += jl_atomic_load_relaxed(&tab[i]) != NULL;
-            if (4 * used >= sz)
-                empty_slot = -1;
-        }
         if (empty_slot != -1) {
             jl_atomic_store_release(&tab[empty_slot], key);
             jl_gc_wb(a, key);
@@ -131,11 +113,13 @@ inline _Atomic(jl_value_t*) *jl_table_peek_bp(jl_genericmemory_t *a, jl_value_t 
     size_t sz = hash_size(a);
     if (sz == 0)
         return NULL;
+    size_t maxprobe = max_probe(sz);
     _Atomic(jl_value_t*) *tab = (_Atomic(jl_value_t*)*) a->ptr;
     uint_t hv = keyhash(key);
     size_t index = h2index(hv, sz);
     sz *= 2;
     size_t orig = index;
+    size_t iter = 0;
 
     do {
         jl_value_t *k2 = jl_atomic_load_relaxed(&tab[index]); // just to ensure the load doesn't get duplicated
@@ -150,7 +134,8 @@ inline _Atomic(jl_value_t*) *jl_table_peek_bp(jl_genericmemory_t *a, jl_value_t 
         }
 
         index = (index + 2) & (sz - 1);
-    } while (index != orig);
+        iter++;
+    } while (iter <= maxprobe && index != orig);
 
     return NULL;
 }
