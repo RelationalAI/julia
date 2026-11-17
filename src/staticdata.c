@@ -2531,6 +2531,9 @@ static void jl_prune_idset(_Atomic(jl_svec_t*) *pkeys, _Atomic(jl_genericmemory_
     for (i = 0; i < keys_list.len; i++) {
         jl_binding_t *ref = (jl_binding_t*)keys_list.items[i];
         jl_svecset(keys2, i, ref);
+        // specializations without an index key are found by a scan instead
+        if (key_hash == speccache_hash && speccache_hash(i, (jl_value_t*)keys2) == 0)
+            continue;
         jl_smallintset_insert(&keyset2, parent, key_hash, i, (jl_value_t*)keys2);
     }
     void *idx = ptrhash_get(&serialization_order, keys);
