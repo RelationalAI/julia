@@ -92,11 +92,19 @@ struct _jl_image_t {
     void **jl_small_typeof;
 };
 
+// The version of the image format. 2: the layout of Method.specializations that
+// jl_specializations_get_linfo_ expects (indexed entries first), which older images lack.
+// 3: Unions with a Tuple or Core.TypeofBottom member no longer make a specialization indexed.
+// 4: every specialization is indexed, by the type cache hash of its signature.
+#define JL_IMAGE_FORMAT_VERSION 4
+// Marks the serialized data of a system image of that version, which a raw .ji has without
+// the native header
+#define JL_SYSIMG_STREAM_TAG (0x4a4c5300u | JL_IMAGE_FORMAT_VERSION)
+
 // The header for each image
 // Details important counts about the image
 typedef struct {
-    // The version of the image format
-    // Most up-to-date version is 1
+    // The version of the image format, JL_IMAGE_FORMAT_VERSION
     uint32_t version;
     // The number of shards in this image
     uint32_t nshards;

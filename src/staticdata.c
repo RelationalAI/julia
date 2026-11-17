@@ -3284,6 +3284,7 @@ static void jl_save_system_image_to_stream(ios_t *f, jl_array_t *mod_array,
         write_padding(f, LLT_ALIGN(ios_pos(f), 8) - ios_pos(f));
         s.s = f;
         if (worklist == NULL) {
+            write_uint32(f, JL_SYSIMG_STREAM_TAG);
             size_t i;
             for (i = 0; tags[i] != NULL; i++) {
                 jl_value_t *tag = *tags[i];
@@ -3906,6 +3907,10 @@ static void jl_restore_system_image_from_stream_(ios_t *f, jl_image_t *image,
     s.s = f;
     uintptr_t offset_restored = 0, offset_init_order = 0, offset_extext_methods = 0, offset_new_ext_cis = 0, offset_method_roots_list = 0;
     if (!s.incremental) {
+        if (read_uint32(f) != JL_SYSIMG_STREAM_TAG) {
+            jl_safe_printf("ERROR: System image file is not compatible with this version of Julia\n");
+            jl_exit(1);
+        }
         size_t i;
         for (i = 0; tags[i] != NULL; i++) {
             jl_value_t **tag = tags[i];
