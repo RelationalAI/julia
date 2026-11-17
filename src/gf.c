@@ -142,13 +142,16 @@ static int8_t jl_cachearg_offset(void)
 /// ----- Insertion logic for special entries ----- ///
 
 
-// A Union whose members are all concrete types with a cached hash. Equal Unions of such
-// members have the same members, so the type cache's hash of them follows type equality.
+// A Union whose members are all concrete non-Tuple types with a cached hash. Equal Unions of
+// such members have the same members, so the type cache's hash of them follows type equality.
+// Excluded are Tuple members, since a Union of Tuples can equal a Tuple of Unions, and
+// Core.TypeofBottom, which equals the non-concrete Type{Union{}}.
 static int spec_concrete_union(jl_value_t *u) JL_NOTSAFEPOINT
 {
     if (jl_is_uniontype(u))
         return spec_concrete_union(((jl_uniontype_t*)u)->a) && spec_concrete_union(((jl_uniontype_t*)u)->b);
-    return jl_is_datatype(u) && ((jl_datatype_t*)u)->hash != 0 && jl_is_concrete_type(u);
+    return jl_is_datatype(u) && ((jl_datatype_t*)u)->hash != 0 && jl_is_concrete_type(u) &&
+           !jl_is_tuple_type(u) && u != (jl_value_t*)jl_typeofbottom_type;
 }
 
 // The key of a specialization signature in `speckeyset`, or 0 if it is not indexed. Indexed
@@ -267,6 +270,9 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
     jl_value_t *ut = jl_is_unionall(type) ? jl_unwrap_unionall(type) : type;
     JL_TYPECHK(specializations, datatype, ut);
     uint_t hv = jl_spec_index_hash(type);
+    // Only a signature with type variables can equal an entry with a cached hash, or a Union of
+    // concrete non-Tuple types (as indexed), so only such a signature scans the front block.
+    int scan_front = !hv && (jl_is_unionall(type) || jl_has_free_typevars(type));
     jl_genericmemory_t *speckeyset = NULL;
     jl_value_t *specializations = NULL;
     // entries [0, front) and [back, cl) of an array of length lastcl are already checked
@@ -316,8 +322,7 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
             else
                 back--;
         }
-        // an unindexed signature can equal any entry
-        while (!hv && !found && front < back) {
+        while (scan_front && !found && front < back) {
             jl_method_instance_t *mi = jl_atomic_load_acquire(&data[front]);
             if ((jl_value_t*)mi == jl_nothing)
                 break;
