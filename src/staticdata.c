@@ -2508,6 +2508,7 @@ static void jl_prune_binding_backedges(jl_array_t *backedges)
 
 uint_t bindingkey_hash(size_t idx, jl_value_t *data);
 uint_t speccache_hash(size_t idx, jl_value_t *data);
+uint_t jl_spec_index_hash(jl_value_t *sig) JL_NOTSAFEPOINT;
 
 static void jl_prune_idset(_Atomic(jl_svec_t*) *pkeys, _Atomic(jl_genericmemory_t*) *pkeyset, uint_t (*key_hash)(size_t, jl_value_t*), jl_value_t *parent) JL_GC_DISABLED
 {
@@ -2528,27 +2529,48 @@ static void jl_prune_idset(_Atomic(jl_svec_t*) *pkeys, _Atomic(jl_genericmemory_
     _Atomic(jl_genericmemory_t*)keyset2;
     jl_atomic_store_relaxed(&keyset2, (jl_genericmemory_t*)jl_an_empty_memory_any);
     jl_svec_t *keys2 = jl_alloc_svec_uninit(keys_list.len);
-    for (i = 0; i < keys_list.len; i++) {
-        jl_binding_t *ref = (jl_binding_t*)keys_list.items[i];
-        jl_svecset(keys2, i, ref);
-        // specializations without an index key are found by a scan instead
-        if (key_hash == speccache_hash && speccache_hash(i, (jl_value_t*)keys2) == 0)
-            continue;
-        jl_smallintset_insert(&keyset2, parent, key_hash, i, (jl_value_t*)keys2);
+    size_t nindexed = keys_list.len;
+    if (key_hash == speccache_hash) {
+        // indexed specializations go first and the others after them, the layout that
+        // jl_specializations_get_linfo_ expects of an array without free slots
+        arraylist_t unindexed;
+        arraylist_new(&unindexed, 0);
+        nindexed = 0;
+        for (i = 0; i < keys_list.len; i++) {
+            jl_method_instance_t *mi = (jl_method_instance_t*)keys_list.items[i];
+            if (jl_spec_index_hash(mi->specTypes))
+                keys_list.items[nindexed++] = mi;
+            else
+                arraylist_push(&unindexed, mi);
+        }
+        for (i = 0; i < unindexed.len; i++)
+            keys_list.items[nindexed + i] = unindexed.items[i];
+        arraylist_free(&unindexed);
     }
+    for (i = 0; i < keys_list.len; i++)
+        jl_svecset(keys2, i, keys_list.items[i]);
+    for (i = 0; i < nindexed; i++)
+        jl_smallintset_insert(&keyset2, parent, key_hash, i, (jl_value_t*)keys2);
     void *idx = ptrhash_get(&serialization_order, keys);
     assert(idx != HT_NOTFOUND && idx != (void*)(uintptr_t)-1);
     assert(serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] == keys);
     ptrhash_put(&serialization_order, keys2, idx);
     serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] = keys2;
+    jl_atomic_store_relaxed(pkeys, keys2);
+    jl_gc_wb(parent, keys2);
 
     idx = ptrhash_get(&serialization_order, keyset);
-    assert(idx != HT_NOTFOUND && idx != (void*)(uintptr_t)-1);
+    if (idx == HT_NOTFOUND) {
+        // the shared empty keyset of a method with only unindexed specializations, which
+        // belongs to an earlier image and is not serialized here
+        assert(keyset == (jl_genericmemory_t*)jl_an_empty_memory_any);
+        assert(jl_atomic_load_relaxed(&keyset2) == (jl_genericmemory_t*)jl_an_empty_memory_any);
+        return;
+    }
+    assert(idx != (void*)(uintptr_t)-1);
     assert(serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] == keyset);
     ptrhash_put(&serialization_order, jl_atomic_load_relaxed(&keyset2), idx);
     serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] = jl_atomic_load_relaxed(&keyset2);
-    jl_atomic_store_relaxed(pkeys, keys2);
-    jl_gc_wb(parent, keys2);
     jl_atomic_store_relaxed(pkeyset, jl_atomic_load_relaxed(&keyset2));
     jl_gc_wb(parent, jl_atomic_load_relaxed(&keyset2));
 }
