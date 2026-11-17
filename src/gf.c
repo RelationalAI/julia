@@ -308,7 +308,7 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
         _Atomic(jl_method_instance_t*) *data = (_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations);
         // an indexed signature can only equal an unindexed entry, at the back
         while (!found && back > front) {
-            jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[back - 1]);
+            jl_method_instance_t *mi = jl_atomic_load_acquire(&data[back - 1]);
             if ((jl_value_t*)mi == jl_nothing)
                 break;
             if (spec_equal(mi, type))
@@ -318,7 +318,7 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
         }
         // an unindexed signature can equal any entry
         while (!hv && !found && front < back) {
-            jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[front]);
+            jl_method_instance_t *mi = jl_atomic_load_acquire(&data[front]);
             if ((jl_value_t*)mi == jl_nothing)
                 break;
             if (spec_equal(mi, type))
@@ -385,7 +385,9 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
         }
         size_t i = hv ? f : t - 1;
         assert(jl_svecref(specializations, i) == jl_nothing);
-        jl_svecset(specializations, i, mi);
+        // release: lock-free scans read the entry without the index's synchronization
+        jl_atomic_store_release(&((_Atomic(jl_value_t*)*)jl_svec_data(specializations))[i], (jl_value_t*)mi);
+        jl_gc_wb(specializations, mi);
         if (hv)
             jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, i, specializations);
         JL_GC_POP();
@@ -2802,13 +2804,13 @@ static void jl_method_table_invalidate(jl_method_t *replaced, size_t max_world, 
     assert(jl_atomic_load_relaxed(&jl_world_counter) == max_world);
     // Invalidate the backedges
     int invalidated = 0;
-    jl_value_t *specializations = jl_atomic_load_relaxed(&replaced->specializations);
+    jl_value_t *specializations = jl_atomic_load_acquire(&replaced->specializations);
     JL_GC_PUSH1(&specializations);
     if (!jl_is_svec(specializations))
         specializations = (jl_value_t*)jl_svec1(specializations);
     size_t i, l = jl_svec_len(specializations);
     for (i = 0; i < l; i++) {
-        jl_method_instance_t *mi = (jl_method_instance_t*)jl_svecref(specializations, i);
+        jl_method_instance_t *mi = jl_atomic_load_acquire((_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations) + i);
         if ((jl_value_t*)mi != jl_nothing) {
             invalidated = 1;
             invalidate_backedges(mi, max_world, "jl_method_table_disable");
@@ -3180,7 +3182,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                     jl_gc_wb(m2, m2_interferences);
                 }
             }
-            loctag = jl_atomic_load_relaxed(&m->specializations); // use loctag for a gcroot
+            loctag = jl_atomic_load_acquire(&m->specializations); // use loctag for a gcroot
             _Atomic(jl_method_instance_t*) *data;
             size_t l;
             if (jl_is_svec(loctag)) {
@@ -3192,7 +3194,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                 l = 1;
             }
             for (size_t i = 0; i < l; i++) {
-                jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[i]);
+                jl_method_instance_t *mi = jl_atomic_load_acquire(&data[i]);
                 if ((jl_value_t*)mi == jl_nothing)
                     continue;
                 jl_array_ptr_1d_push(oldmi, (jl_value_t*)mi);
@@ -3235,7 +3237,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                     continue;
 
                 // Now examine if this caused any invalidations.
-                loctag = jl_atomic_load_relaxed(&m->specializations); // use loctag for a gcroot
+                loctag = jl_atomic_load_acquire(&m->specializations); // use loctag for a gcroot
                 _Atomic(jl_method_instance_t*) *data;
                 size_t l;
                 if (jl_is_svec(loctag)) {
@@ -3247,7 +3249,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                     l = 1;
                 }
                 for (size_t i = 0; i < l; i++) {
-                    jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[i]);
+                    jl_method_instance_t *mi = jl_atomic_load_acquire(&data[i]);
                     if ((jl_value_t*)mi == jl_nothing)
                         continue;
                     if (jl_type_intersection2(type, mi->specTypes, &isect, &isect2)) {
