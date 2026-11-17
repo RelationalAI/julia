@@ -1129,7 +1129,7 @@ static GlobalVariable *emit_ptls_table(Module &M, Type *T_size, Type *T_ptr) {
 
 // See src/processor.h for documentation about this table. Corresponds to jl_image_header_t.
 static GlobalVariable *emit_image_header(Module &M, unsigned threads, unsigned nfvars, unsigned ngvars) {
-    constexpr uint32_t version = 1;
+    constexpr uint32_t version = JL_IMAGE_FORMAT_VERSION;
     std::array<uint32_t, 4> header{
         version,
         threads,
