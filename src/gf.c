@@ -229,6 +229,98 @@ static int spec_members_may_sub(jl_value_t *x, jl_value_t *u) JL_NOTSAFEPOINT
     return spec_may_sub((jl_datatype_t*)x, u);
 }
 
+// Whether no member of Union `u` is a subtype of another. A Union built without the usual
+// simplification, such as Union{DataType, Type{Int}} left by dropping a type variable, can
+// equal a type that is not a Union.
+static int spec_union_normal(jl_value_t *u)
+{
+    int i, j, n = jl_count_union_components(u);
+    for (i = 0; i < n; i++) {
+        jl_value_t *a = jl_nth_union_component(u, i);
+        for (j = 0; j < n; j++) {
+            jl_value_t *b = jl_nth_union_component(u, j);
+            if (i == j || (jl_is_concrete_type(a) && jl_is_concrete_type(b) && a != b))
+                continue;
+            if (jl_subtype(a, b))
+                return 0;
+        }
+    }
+    return 1;
+}
+
+// Whether a Union `u` in normal form, at `depth` Tuple levels inside a signature without type
+// variables, keeps that signature from equaling any indexed entry. An indexed entry has a type
+// there that is not a Union (it has a cached hash), or at depth 0 possibly a Union of concrete
+// non-Tuple types. A Union in normal form equals no type that is not a Union, and none of
+// those Unions if it has a Tuple or abstract member.
+static int spec_union_rules_out(jl_value_t *u, int depth)
+{
+    if (!spec_union_normal(u))
+        return 0;
+    if (depth > 0)
+        return 1;
+    int i, n = jl_count_union_components(u);
+    for (i = 0; i < n; i++) {
+        jl_value_t *m = jl_nth_union_component(u, i);
+        if (jl_is_tuple_type(jl_unwrap_unionall(m)))
+            return 1;
+        if (jl_is_datatype(m) && jl_is_abstracttype(m) && !jl_is_type_type(m))
+            return 1;
+    }
+    return 0;
+}
+
+static int spec_has_ruling_union(jl_datatype_t *tt, int depth)
+{
+    size_t i, l = jl_nparams(tt);
+    for (i = 0; i < l; i++) {
+        jl_value_t *p = jl_tparam(tt, i);
+        if (jl_is_uniontype(p) ? spec_union_rules_out(p, depth) :
+            jl_is_tuple_type(p) && spec_has_ruling_union((jl_datatype_t*)p, depth + 1))
+            return 1;
+    }
+    return 0;
+}
+
+// Whether an unindexed signature can equal an indexed entry. Without type variables it cannot
+// when it has a Union that rules that out; a Union not in normal form, such as
+// Union{DataType, Type{Int}} left by dropping a type variable, does not.
+static int spec_may_equal_indexed(jl_value_t *sig)
+{
+    return jl_is_unionall(sig) || jl_has_free_typevars(sig) || !spec_has_ruling_union((jl_datatype_t*)sig, 0);
+}
+
+static int spec_may_equal(jl_value_t *a, jl_value_t *b) JL_NOTSAFEPOINT;
+
+// Whether the parameters `x` and `y` of Type{x} and Type{y} can be equal types.
+static int spec_type_arg_may_equal(jl_value_t *x, jl_value_t *y) JL_NOTSAFEPOINT
+{
+    if (x == y || jl_is_typevar(x) || jl_is_typevar(y))
+        return 1;
+    if (jl_is_uniontype(y)) {
+        jl_value_t *t = x;
+        x = y;
+        y = t;
+    }
+    if (!jl_is_datatype(y) || jl_is_type_type(y) || jl_is_kind(y))
+        return 1;
+    jl_datatype_t *dy = (jl_datatype_t*)y;
+    if (jl_is_uniontype(x))
+        // a Union of distinct members, each a subtype of a concrete type that is not a kind
+        // or a Tuple, would have to be that one type
+        return jl_has_free_typevars(x) || !(jl_is_concrete_type(y) && !jl_is_tuple_type(y));
+    if (!jl_is_datatype(x) || jl_is_type_type(x) || jl_is_kind(x))
+        return 1;
+    jl_datatype_t *dx = (jl_datatype_t*)x;
+    if (dx->name != dy->name)
+        return 0;
+    if (dx->hash && dy->hash)
+        return dx->hash == dy->hash;
+    if (jl_is_tuple_type(x))
+        return spec_may_equal(x, y);
+    return 1;
+}
+
 // A cheap test that rules out most unequal pairs before jl_types_equal. Equal tuple types
 // have each parameter of one within the bounds of the other's parameter at that position.
 static int spec_may_equal(jl_value_t *a, jl_value_t *b) JL_NOTSAFEPOINT
@@ -244,6 +336,9 @@ static int spec_may_equal(jl_value_t *a, jl_value_t *b) JL_NOTSAFEPOINT
         jl_value_t *pa = jl_tparam(da, i), *pb = jl_tparam(db, i);
         if (pa == pb)
             continue;
+        if (jl_is_type_type(pa) && jl_is_type_type(pb) &&
+            !spec_type_arg_may_equal(jl_tparam0(pa), jl_tparam0(pb)))
+            return 0;
         if (!jl_is_typevar(pa) && !spec_members_may_sub(pa, pb))
             return 0;
         if (!jl_is_typevar(pb) && !spec_members_may_sub(pb, pa))
@@ -270,9 +365,7 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
     jl_value_t *ut = jl_is_unionall(type) ? jl_unwrap_unionall(type) : type;
     JL_TYPECHK(specializations, datatype, ut);
     uint_t hv = jl_spec_index_hash(type);
-    // Only a signature with type variables can equal an entry with a cached hash, or a Union of
-    // concrete non-Tuple types (as indexed), so only such a signature scans the front block.
-    int scan_front = !hv && (jl_is_unionall(type) || jl_has_free_typevars(type));
+    int scan_front = !hv && spec_may_equal_indexed(type);
     jl_genericmemory_t *speckeyset = NULL;
     jl_value_t *specializations = NULL;
     // entries [0, front) and [back, cl) of an array of length lastcl are already checked
