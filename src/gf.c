@@ -229,39 +229,46 @@ static int spec_members_may_sub(jl_value_t *x, jl_value_t *u) JL_NOTSAFEPOINT
     return spec_may_sub((jl_datatype_t*)x, u);
 }
 
-// Whether no member of Union `u` is a subtype of another. A Union built without the usual
-// simplification, such as Union{DataType, Type{Int}} left by dropping a type variable, can
-// equal a type that is not a Union.
-static int spec_union_normal(jl_value_t *u)
+#define SPEC_MAX_UNION 32
+
+// Stores the members of Union `u` in `out`, or returns -1 if it has more than SPEC_MAX_UNION.
+static int spec_union_members(jl_value_t *u, jl_value_t **out, int n) JL_NOTSAFEPOINT
 {
-    int i, j, n = jl_count_union_components(u);
-    for (i = 0; i < n; i++) {
-        jl_value_t *a = jl_nth_union_component(u, i);
-        for (j = 0; j < n; j++) {
-            jl_value_t *b = jl_nth_union_component(u, j);
-            if (i == j || (jl_is_concrete_type(a) && jl_is_concrete_type(b) && a != b))
-                continue;
-            if (jl_subtype(a, b))
-                return 0;
-        }
+    if (jl_is_uniontype(u)) {
+        n = spec_union_members(((jl_uniontype_t*)u)->a, out, n);
+        return n < 0 ? n : spec_union_members(((jl_uniontype_t*)u)->b, out, n);
     }
-    return 1;
+    if (n >= SPEC_MAX_UNION)
+        return -1;
+    out[n] = u;
+    return n + 1;
 }
 
 // Whether a Union `u` in normal form, at `depth` Tuple levels inside a signature without type
 // variables, keeps that signature from equaling any indexed entry. An indexed entry has a type
 // there that is not a Union (it has a cached hash), or at depth 0 possibly a Union of concrete
-// non-Tuple types. A Union in normal form equals no type that is not a Union, and none of
-// those Unions if it has a Tuple or abstract member.
+// non-Tuple types. A Union in normal form (no member a subtype of another) equals no type
+// that is not a Union, and none of those Unions if it has a Tuple or abstract member. A Union
+// built without the usual simplification, such as Union{DataType, Type{Int}} left by dropping
+// a type variable, is not in normal form. A large Union is not checked.
 static int spec_union_rules_out(jl_value_t *u, int depth)
 {
-    if (!spec_union_normal(u))
+    jl_value_t *ms[SPEC_MAX_UNION];
+    int i, j, n = spec_union_members(u, ms, 0);
+    if (n < 0)
         return 0;
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < n; j++) {
+            if (i == j || (jl_is_concrete_type(ms[i]) && jl_is_concrete_type(ms[j]) && ms[i] != ms[j]))
+                continue;
+            if (jl_subtype(ms[i], ms[j]))
+                return 0;
+        }
+    }
     if (depth > 0)
         return 1;
-    int i, n = jl_count_union_components(u);
     for (i = 0; i < n; i++) {
-        jl_value_t *m = jl_nth_union_component(u, i);
+        jl_value_t *m = ms[i];
         if (jl_is_tuple_type(jl_unwrap_unionall(m)))
             return 1;
         if (jl_is_datatype(m) && jl_is_abstracttype(m) && !jl_is_type_type(m))
@@ -365,7 +372,7 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
     jl_value_t *ut = jl_is_unionall(type) ? jl_unwrap_unionall(type) : type;
     JL_TYPECHK(specializations, datatype, ut);
     uint_t hv = jl_spec_index_hash(type);
-    int scan_front = !hv && spec_may_equal_indexed(type);
+    int scan_front = hv ? 0 : -1; // decided when there are indexed entries to scan
     jl_genericmemory_t *speckeyset = NULL;
     jl_value_t *specializations = NULL;
     // entries [0, front) and [back, cl) of an array of length lastcl are already checked
@@ -415,7 +422,9 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
             else
                 back--;
         }
-        while (scan_front && !found && front < back) {
+        if (scan_front < 0 && front < back && (jl_value_t*)jl_atomic_load_relaxed(&data[front]) != jl_nothing)
+            scan_front = spec_may_equal_indexed(type);
+        while (scan_front > 0 && !found && front < back) {
             jl_method_instance_t *mi = jl_atomic_load_acquire(&data[front]);
             if ((jl_value_t*)mi == jl_nothing)
                 break;
