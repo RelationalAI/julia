@@ -142,36 +142,16 @@ static int8_t jl_cachearg_offset(void)
 /// ----- Insertion logic for special entries ----- ///
 
 
-// A Union whose members are all concrete non-Tuple types with a cached hash. Equal Unions of
-// such members have the same members, so the type cache's hash of them follows type equality.
-// Excluded are Tuple members, since a Union of Tuples can equal a Tuple of Unions, and
-// Core.TypeofBottom, which equals the non-concrete Type{Union{}}.
-static int spec_concrete_union(jl_value_t *u) JL_NOTSAFEPOINT
-{
-    if (jl_is_uniontype(u))
-        return spec_concrete_union(((jl_uniontype_t*)u)->a) && spec_concrete_union(((jl_uniontype_t*)u)->b);
-    return jl_is_datatype(u) && ((jl_datatype_t*)u)->hash != 0 && jl_is_concrete_type(u) &&
-           !jl_is_tuple_type(u) && u != (jl_value_t*)jl_typeofbottom_type;
-}
-
-// The key of a specialization signature in `speckeyset`, or 0 if it is not indexed. Indexed
-// are signatures with a cached hash, and signatures without type variables whose other
-// parameters are such Unions; for both, equal types have equal keys. All other signatures are
-// found by a linear scan with jl_types_equal, as in stock Julia.
+// The key of a specialization signature in `speckeyset`: the cached hash of the signature if it
+// has one, otherwise the hash that the type cache computes for a type without a cached hash
+// (it contains a Union or a type variable). Never 0, so every signature is indexed. Equal
+// signatures written differently can get different keys, and then different MethodInstances,
+// as in stock Julia for signatures without a cached hash.
 uint_t jl_spec_index_hash(jl_value_t *sig) JL_NOTSAFEPOINT
 {
-    if (jl_is_unionall(sig))
-        return ((jl_datatype_t*)jl_unwrap_unionall(sig))->hash;
-    jl_datatype_t *dt = (jl_datatype_t*)sig;
-    if (dt->hash)
-        return dt->hash;
-    size_t i, l = jl_nparams(dt);
-    for (i = 0; i < l; i++) {
-        jl_value_t *p = jl_tparam(dt, i);
-        if (jl_is_datatype(p) ? ((jl_datatype_t*)p)->hash == 0 : !(jl_is_uniontype(p) && spec_concrete_union(p)))
-            return 0;
-    }
-    uint_t h = jl_type_hash_nofail(sig);
+    uint_t h = ((jl_datatype_t*)jl_unwrap_unionall(sig))->hash;
+    if (!h)
+        h = jl_type_hash_nofail(sig);
     return h ? h : 1;
 }
 
@@ -196,175 +176,11 @@ static int speccache_eq(size_t idx, const void *ty, jl_value_t *data, uint_t hv)
     return jl_types_equal(sig, (jl_value_t*)ty);
 }
 
-// Whether a type of the form `x` (not a type variable) can be a subtype of `u`, judged only by
-// type names: then the name of `u`, or of one member of it, is a supertype name of `x`, and
-// a concrete `u` is `x` itself. Answers 1 when it cannot tell.
-static int spec_may_sub(jl_datatype_t *x, jl_value_t *u) JL_NOTSAFEPOINT
-{
-    while (jl_is_typevar(u))
-        u = ((jl_tvar_t*)u)->ub;
-    if (jl_is_uniontype(u))
-        return spec_may_sub(x, ((jl_uniontype_t*)u)->a) || spec_may_sub(x, ((jl_uniontype_t*)u)->b);
-    u = jl_unwrap_unionall(u);
-    if (!jl_is_datatype(u) || jl_is_type_type(u) || jl_is_kind(u))
-        return 1;
-    jl_datatype_t *ud = (jl_datatype_t*)u;
-    if (ud->hash && x->hash && jl_is_concrete_type(u))
-        return ud->hash == x->hash;
-    for (jl_datatype_t *t = x; t->name != ud->name; t = t->super) {
-        if (t == jl_any_type)
-            return 0;
-    }
-    return 1;
-}
-
-// spec_may_sub for each member of a Union `x`
-static int spec_members_may_sub(jl_value_t *x, jl_value_t *u) JL_NOTSAFEPOINT
-{
-    if (jl_is_uniontype(x))
-        return spec_members_may_sub(((jl_uniontype_t*)x)->a, u) && spec_members_may_sub(((jl_uniontype_t*)x)->b, u);
-    x = jl_unwrap_unionall(x);
-    if (!jl_is_datatype(x) || jl_is_type_type(x) || jl_is_kind(x))
-        return 1;
-    return spec_may_sub((jl_datatype_t*)x, u);
-}
-
-#define SPEC_MAX_UNION 32
-
-// Stores the members of Union `u` in `out`, or returns -1 if it has more than SPEC_MAX_UNION.
-static int spec_union_members(jl_value_t *u, jl_value_t **out, int n) JL_NOTSAFEPOINT
-{
-    if (jl_is_uniontype(u)) {
-        n = spec_union_members(((jl_uniontype_t*)u)->a, out, n);
-        return n < 0 ? n : spec_union_members(((jl_uniontype_t*)u)->b, out, n);
-    }
-    if (n >= SPEC_MAX_UNION)
-        return -1;
-    out[n] = u;
-    return n + 1;
-}
-
-// Whether a Union `u` in normal form, at `depth` Tuple levels inside a signature without type
-// variables, keeps that signature from equaling any indexed entry. An indexed entry has a type
-// there that is not a Union (it has a cached hash), or at depth 0 possibly a Union of concrete
-// non-Tuple types. A Union in normal form (no member a subtype of another) equals no type
-// that is not a Union, and none of those Unions if it has a Tuple or abstract member. A Union
-// built without the usual simplification, such as Union{DataType, Type{Int}} left by dropping
-// a type variable, is not in normal form. A large Union is not checked.
-static int spec_union_rules_out(jl_value_t *u, int depth)
-{
-    jl_value_t *ms[SPEC_MAX_UNION];
-    int i, j, n = spec_union_members(u, ms, 0);
-    if (n < 0)
-        return 0;
-    for (i = 0; i < n; i++) {
-        for (j = 0; j < n; j++) {
-            if (i == j || (jl_is_concrete_type(ms[i]) && jl_is_concrete_type(ms[j]) && ms[i] != ms[j]))
-                continue;
-            if (jl_subtype(ms[i], ms[j]))
-                return 0;
-        }
-    }
-    if (depth > 0)
-        return 1;
-    for (i = 0; i < n; i++) {
-        jl_value_t *m = ms[i];
-        if (jl_is_tuple_type(jl_unwrap_unionall(m)))
-            return 1;
-        if (jl_is_datatype(m) && jl_is_abstracttype(m) && !jl_is_type_type(m))
-            return 1;
-    }
-    return 0;
-}
-
-static int spec_has_ruling_union(jl_datatype_t *tt, int depth)
-{
-    size_t i, l = jl_nparams(tt);
-    for (i = 0; i < l; i++) {
-        jl_value_t *p = jl_tparam(tt, i);
-        if (jl_is_uniontype(p) ? spec_union_rules_out(p, depth) :
-            jl_is_tuple_type(p) && spec_has_ruling_union((jl_datatype_t*)p, depth + 1))
-            return 1;
-    }
-    return 0;
-}
-
-// Whether an unindexed signature can equal an indexed entry. Without type variables it cannot
-// when it has a Union that rules that out; a Union not in normal form, such as
-// Union{DataType, Type{Int}} left by dropping a type variable, does not.
-static int spec_may_equal_indexed(jl_value_t *sig)
-{
-    return jl_is_unionall(sig) || jl_has_free_typevars(sig) || !spec_has_ruling_union((jl_datatype_t*)sig, 0);
-}
-
-static int spec_may_equal(jl_value_t *a, jl_value_t *b) JL_NOTSAFEPOINT;
-
-// Whether the parameters `x` and `y` of Type{x} and Type{y} can be equal types.
-static int spec_type_arg_may_equal(jl_value_t *x, jl_value_t *y) JL_NOTSAFEPOINT
-{
-    if (x == y || jl_is_typevar(x) || jl_is_typevar(y))
-        return 1;
-    if (jl_is_uniontype(y)) {
-        jl_value_t *t = x;
-        x = y;
-        y = t;
-    }
-    if (!jl_is_datatype(y) || jl_is_type_type(y) || jl_is_kind(y))
-        return 1;
-    jl_datatype_t *dy = (jl_datatype_t*)y;
-    if (jl_is_uniontype(x))
-        // a Union of distinct members, each a subtype of a concrete type that is not a kind
-        // or a Tuple, would have to be that one type
-        return jl_has_free_typevars(x) || !(jl_is_concrete_type(y) && !jl_is_tuple_type(y));
-    if (!jl_is_datatype(x) || jl_is_type_type(x) || jl_is_kind(x))
-        return 1;
-    jl_datatype_t *dx = (jl_datatype_t*)x;
-    if (dx->name != dy->name)
-        return 0;
-    if (dx->hash && dy->hash)
-        return dx->hash == dy->hash;
-    if (jl_is_tuple_type(x))
-        return spec_may_equal(x, y);
-    return 1;
-}
-
-// A cheap test that rules out most unequal pairs before jl_types_equal. Equal tuple types
-// have each parameter of one within the bounds of the other's parameter at that position.
-static int spec_may_equal(jl_value_t *a, jl_value_t *b) JL_NOTSAFEPOINT
-{
-    if (a == b)
-        return 1;
-    jl_datatype_t *da = (jl_datatype_t*)jl_unwrap_unionall(a);
-    jl_datatype_t *db = (jl_datatype_t*)jl_unwrap_unionall(b);
-    size_t i, l = jl_nparams(da);
-    if (l != jl_nparams(db))
-        return 1;
-    for (i = 0; i < l; i++) {
-        jl_value_t *pa = jl_tparam(da, i), *pb = jl_tparam(db, i);
-        if (pa == pb)
-            continue;
-        if (jl_is_type_type(pa) && jl_is_type_type(pb) &&
-            !spec_type_arg_may_equal(jl_tparam0(pa), jl_tparam0(pb)))
-            return 0;
-        if (!jl_is_typevar(pa) && !spec_members_may_sub(pa, pb))
-            return 0;
-        if (!jl_is_typevar(pb) && !spec_members_may_sub(pb, pa))
-            return 0;
-    }
-    return 1;
-}
-
-static int spec_equal(jl_method_instance_t *mi, jl_value_t *type)
-{
-    return spec_may_equal(mi->specTypes, type) && jl_types_equal(mi->specTypes, type);
-}
-
 // get or create the MethodInstance for a specialization
 //
-// `specializations` holds the indexed signatures (jl_spec_index_hash != 0) in a block at the
-// front, and the others in a block at the back, with `nothing` between them (none in an array
-// compacted for an image). Indexed entries never move, so the index stays valid for every
-// version of the array; it is only appended to, after the entry is stored.
+// Every entry of `specializations` is indexed in `speckeyset`, and entries are stored from the
+// front and never move, so the index stays valid for every version of the array. The index is
+// only appended to, after the entry is stored.
 static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PROPAGATES_ROOT, jl_value_t *type, jl_svec_t *sparams, jl_method_instance_t *mi_insert)
 {
     if (m->source == NULL && m->generator == NULL && jl_atomic_load_relaxed(&m->unspecialized) != NULL && m != jl_opaque_closure_method && !m->is_for_opaque_closure)
@@ -372,11 +188,8 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
     jl_value_t *ut = jl_is_unionall(type) ? jl_unwrap_unionall(type) : type;
     JL_TYPECHK(specializations, datatype, ut);
     uint_t hv = jl_spec_index_hash(type);
-    int scan_front = hv ? 0 : -1; // decided when there are indexed entries to scan
     jl_genericmemory_t *speckeyset = NULL;
     jl_value_t *specializations = NULL;
-    // entries [0, front) and [back, cl) of an array of length lastcl are already checked
-    size_t cl = 0, lastcl = 0, front = 0, back = 0;
     for (int locked = 0; locked < 2; locked++) {
         if (locked) {
             if (!sparams) // can't insert without knowing this
@@ -398,41 +211,9 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
             }
             continue;
         }
-        cl = jl_svec_len(specializations);
-        if (cl != lastcl) { // grown (or first seen): check everything again
-            front = 0;
-            back = cl;
-            lastcl = cl;
-        }
         JL_GC_PUSH1(&specializations); // comparing types can reach a safepoint
-        jl_method_instance_t *found = NULL;
-        if (hv) {
-            ssize_t idx = jl_smallintset_lookup(speckeyset, speccache_eq, type, specializations, hv, 0);
-            if (idx != -1)
-                found = (jl_method_instance_t*)jl_svecref(specializations, idx);
-        }
-        _Atomic(jl_method_instance_t*) *data = (_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations);
-        // an indexed signature can only equal an unindexed entry, at the back
-        while (!found && back > front) {
-            jl_method_instance_t *mi = jl_atomic_load_acquire(&data[back - 1]);
-            if ((jl_value_t*)mi == jl_nothing)
-                break;
-            if (spec_equal(mi, type))
-                found = mi;
-            else
-                back--;
-        }
-        if (scan_front < 0 && front < back && (jl_value_t*)jl_atomic_load_relaxed(&data[front]) != jl_nothing)
-            scan_front = spec_may_equal_indexed(type);
-        while (scan_front > 0 && !found && front < back) {
-            jl_method_instance_t *mi = jl_atomic_load_acquire(&data[front]);
-            if ((jl_value_t*)mi == jl_nothing)
-                break;
-            if (spec_equal(mi, type))
-                found = mi;
-            else
-                front++;
-        }
+        ssize_t idx = jl_smallintset_lookup(speckeyset, speccache_eq, type, specializations, hv, 0);
+        jl_method_instance_t *found = idx != -1 ? (jl_method_instance_t*)jl_svecref(specializations, idx) : NULL;
         JL_GC_POP();
         if (found) {
             if (locked)
@@ -447,56 +228,39 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
     }
     else {
         JL_GC_PUSH2(&mi, &specializations);
+        size_t cl;
         if (!jl_is_svec(specializations)) {
             jl_method_instance_t *mi = (jl_method_instance_t*)specializations;
-            uint_t hv = jl_spec_index_hash(mi->specTypes);
             cl = 7;
             specializations = (jl_value_t*)jl_svec_fill(cl, jl_nothing);
-            jl_svecset(specializations, hv ? 0 : cl - 1, mi);
+            jl_svecset(specializations, 0, mi);
             // index the entry before publishing the array, since it already exists
-            if (hv)
-                jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, 0, specializations);
+            jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, 0, specializations);
             jl_atomic_store_release(&m->specializations, specializations);
             jl_gc_wb(m, specializations);
         }
+        cl = jl_svec_len(specializations);
         _Atomic(jl_method_instance_t*) *data = (_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations);
-        size_t f = 0, t = cl;
-        while (f < cl && (jl_value_t*)jl_atomic_load_relaxed(&data[f]) != jl_nothing)
-            f++;
-        while (t > f && (jl_value_t*)jl_atomic_load_relaxed(&data[t - 1]) != jl_nothing)
-            t--;
-        // keep a `nothing` between the blocks after inserting
-        if (t - f < 2) {
-            size_t split = f;
-            if (f == cl) { // compacted for an image: find where the unindexed block starts
-                for (split = 0; split < cl; split++)
-                    if (jl_spec_index_hash(jl_atomic_load_relaxed(&data[split])->specTypes) == 0)
-                        break;
-                t = split;
-            }
+        size_t i = 0;
+        while (i < cl && (jl_value_t*)jl_atomic_load_relaxed(&data[i]) != jl_nothing)
+            i++;
+        // keep a free slot after the new entry (an array compacted for an image has none)
+        if (i + 1 >= cl) {
             size_t ncl = cl < 7 ? 7 : (cl*3)>>1;
             jl_svec_t *nc = jl_alloc_svec_uninit(ncl);
-            if (split > 0)
-                memcpy((char*)jl_svec_data(nc), jl_svec_data(specializations), sizeof(void*) * split);
-            for (size_t j = 0; j < ncl - cl; j++)
-                jl_svecset(nc, j + split, jl_nothing);
-            if (split < cl)
-                memcpy((char*)jl_svec_data(nc) + sizeof(void*) * (split + ncl - cl),
-                       (char*)jl_svec_data(specializations) + sizeof(void*) * split,
-                       sizeof(void*) * (cl - split));
+            memcpy((char*)jl_svec_data(nc), jl_svec_data(specializations), sizeof(void*) * i);
+            for (size_t j = i; j < ncl; j++)
+                jl_svecset(nc, j, jl_nothing);
             specializations = (jl_value_t*)nc;
             jl_atomic_store_release(&m->specializations, specializations);
             jl_gc_wb(m, specializations);
-            f = split;
-            t += ncl - cl;
         }
-        size_t i = hv ? f : t - 1;
         assert(jl_svecref(specializations, i) == jl_nothing);
-        // release: lock-free scans read the entry without the index's synchronization
+        // release: lock-free readers find the entry through the index, but the store of the
+        // MethodInstance must still order its initialization before it
         jl_atomic_store_release(&((_Atomic(jl_value_t*)*)jl_svec_data(specializations))[i], (jl_value_t*)mi);
         jl_gc_wb(specializations, mi);
-        if (hv)
-            jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, i, specializations);
+        jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, i, specializations);
         JL_GC_POP();
     }
     JL_UNLOCK(&m->writelock); // may gc
