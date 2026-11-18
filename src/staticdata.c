@@ -2538,14 +2538,21 @@ static void jl_prune_idset(_Atomic(jl_svec_t*) *pkeys, _Atomic(jl_genericmemory_
     assert(serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] == keys);
     ptrhash_put(&serialization_order, keys2, idx);
     serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] = keys2;
+    jl_atomic_store_relaxed(pkeys, keys2);
+    jl_gc_wb(parent, keys2);
 
     idx = ptrhash_get(&serialization_order, keyset);
-    assert(idx != HT_NOTFOUND && idx != (void*)(uintptr_t)-1);
+    if (idx == HT_NOTFOUND) {
+        // the shared empty keyset, which belongs to an earlier image and is not serialized
+        // here; every kept key is indexed, so there are none
+        assert(keyset == (jl_genericmemory_t*)jl_an_empty_memory_any);
+        assert(keys_list.len == 0);
+        return;
+    }
+    assert(idx != (void*)(uintptr_t)-1);
     assert(serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] == keyset);
     ptrhash_put(&serialization_order, jl_atomic_load_relaxed(&keyset2), idx);
     serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] = jl_atomic_load_relaxed(&keyset2);
-    jl_atomic_store_relaxed(pkeys, keys2);
-    jl_gc_wb(parent, keys2);
     jl_atomic_store_relaxed(pkeyset, jl_atomic_load_relaxed(&keyset2));
     jl_gc_wb(parent, jl_atomic_load_relaxed(&keyset2));
 }
