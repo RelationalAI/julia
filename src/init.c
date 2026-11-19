@@ -721,6 +721,12 @@ JL_DLLEXPORT void jl_init_(jl_image_buf_t sysimage)
     init_global_mutexes();
     jl_precompile_toplevel_module = NULL;
     ios_set_io_wait_func = jl_set_io_wait;
+#ifdef _OS_LINUX_
+    // Keep libuv's fs requests off io_uring: in libuv 1.48 uv__iou_submit has no full barrier
+    // before it checks IORING_SQ_NEED_WAKEUP, so a request can stay unsubmitted while the SQPOLL
+    // thread sleeps. libuv 1.49 made SQPOLL opt-in (libuv#4492). An explicit setting wins.
+    setenv("UV_USE_IO_URING", "0", 0);
+#endif
     jl_io_loop = uv_default_loop(); // this loop will internal events (spawning process etc.),
                                     // best to call this first, since it also initializes libuv
     jl_init_uv();
