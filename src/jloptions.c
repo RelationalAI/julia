@@ -34,16 +34,16 @@ JL_DLLEXPORT const char *jl_get_default_sysimg_path(void)
     return &system_image_path[1];
 }
 
-/* This function is also used by gc-stock.c to parse the
- * JULIA_HEAP_SIZE_HINT environment variable. */
-uint64_t parse_heap_size_option(const char *optarg, const char *option_name, int allow_pct)
+// Returns 0 on success, -1 for an invalid value and 1 for a value that does not fit in 64 bits
+// (with *out set to UINT64_MAX).
+int jl_parse_heap_size(const char *str, int allow_pct, uint64_t *out)
 {
     long double value = 0.0;
     char unit[4] = {0};
-    int nparsed = sscanf(optarg, "%Lf%3s", &value, unit);
-    if (nparsed == 0 || strlen(unit) > 2 || (strlen(unit) == 2 && ascii_tolower(unit[1]) != 'b')) {
-        jl_errorf("julia: invalid argument to %s (%s)", option_name, optarg);
-    }
+    *out = 0;
+    int nparsed = sscanf(str, "%Lf%3s", &value, unit);
+    if (nparsed == 0 || strlen(unit) > 2 || (strlen(unit) == 2 && ascii_tolower(unit[1]) != 'b'))
+        return -1;
     uint64_t multiplier = 1ull;
     switch (ascii_tolower(unit[0])) {
         case '\0':
@@ -62,9 +62,7 @@ uint64_t parse_heap_size_option(const char *optarg, const char *option_name, int
             multiplier <<= 40;
             break;
         case '%':
-            if (allow_pct) {
-                if (value > 100)
-                    jl_errorf("julia: invalid percentage specified in %s", option_name);
+            if (allow_pct && value <= 100) {
                 uint64_t mem = uv_get_total_memory();
                 uint64_t cmem = uv_get_constrained_memory();
                 if (cmem > 0 && cmem < mem)
@@ -72,16 +70,30 @@ uint64_t parse_heap_size_option(const char *optarg, const char *option_name, int
                 multiplier = mem/100;
                 break;
             }
+            return -1;
         default:
-            jl_errorf("julia: invalid argument to %s (%s)", option_name, optarg);
-            break;
+            return -1;
     }
     long double sz = value * multiplier;
-    if (isnan(sz) || sz < 0) {
-        jl_errorf("julia: invalid argument to %s (%s)", option_name, optarg);
-    }
+    if (isnan(sz) || sz < 0)
+        return -1;
     const long double limit = ldexpl(1.0, 64); // UINT64_MAX + 1
-    return sz < limit ? (uint64_t)sz : UINT64_MAX;
+    if (sz >= limit) {
+        *out = UINT64_MAX;
+        return 1;
+    }
+    *out = (uint64_t)sz;
+    return 0;
+}
+
+/* This function is also used by gc-stock.c to parse the
+ * JULIA_HEAP_SIZE_HINT environment variable. */
+uint64_t parse_heap_size_option(const char *optarg, const char *option_name, int allow_pct)
+{
+    uint64_t sz;
+    if (jl_parse_heap_size(optarg, allow_pct, &sz) < 0)
+        jl_errorf("julia: invalid argument to %s (%s)", option_name, optarg);
+    return sz;
 }
 
 static int jl_options_initialized = 0;
@@ -155,6 +167,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         0, // heap-size-hint
                         0, // hard-heap-limit
                         0, // heap-target-increment
+                        0, // heap-target-increment-per-thread
                         0, // trace_compile_timing
                         JL_TRIM_NO, // trim
                         0, // trace-eval
@@ -163,6 +176,7 @@ JL_DLLEXPORT void jl_init_options(void)
                         0, // gc_sweep_always_full
                         0, // compress_sysimage
                         0, // alert_on_critical_error
+                        NULL, // safe_crash_log_file
     };
     jl_options_initialized = 1;
 }
@@ -358,6 +372,15 @@ static const char opts_hidden[]  =
     "                                               a number of bytes, optionally in units of:\n"
     "                                               B, K (kibibytes), M (mebibytes), G (gibibytes)\n"
     "                                               or T (tebibytes).\n"
+    " --heap-target-increment-per-thread=<size>[<unit>]\n"
+    "                                               Let the heap grow by this much per thread that\n"
+    "                                               allocated since the last collection, if that is\n"
+    "                                               more than the heuristic allows. The growth stays\n"
+    "                                               below 1/16 of the memory limit and below the\n"
+    "                                               --heap-size-hint limit. Ignored with\n"
+    "                                               --hard-heap-limit or --heap-target-increment.\n"
+    "                                               Also read from the environment variable\n"
+    "                                               JULIA_HEAP_TARGET_INCREMENT_PER_THREAD.\n"
     " --gc-sweep-always-full                        Makes the GC always do a full sweep of the heap\n"
 ;
 
@@ -409,6 +432,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_heap_size_hint,
            opt_hard_heap_limit,
            opt_heap_target_increment,
+           opt_heap_target_increment_per_thread,
            opt_gc_sweep_always_full,
            opt_gc_threads,
            opt_permalloc_pkgimg,
@@ -416,6 +440,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_trace_eval,
            opt_experimental_features,
            opt_compress_sysimage,
+           opt_safe_crash_log_file,
     };
     static const char* const shortopts = "+vhqH:e:E:L:J:C:it:p:O:g:m:";
     static const struct option longopts[] = {
@@ -485,10 +510,12 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "heap-size-hint",  required_argument, 0, opt_heap_size_hint },
         { "hard-heap-limit", required_argument, 0, opt_hard_heap_limit },
         { "heap-target-increment", required_argument, 0, opt_heap_target_increment },
+        { "heap-target-increment-per-thread", required_argument, 0, opt_heap_target_increment_per_thread },
         { "gc-sweep-always-full", no_argument, 0, opt_gc_sweep_always_full },
         { "trim",  optional_argument, 0, opt_trim },
         { "compress-sysimage", required_argument, 0, opt_compress_sysimage },
         { "trace-eval",       optional_argument, 0, opt_trace_eval },
+        { "safe-crash-log-file",   required_argument, 0, opt_safe_crash_log_file },
         { 0, 0, 0, 0 }
     };
 
@@ -1021,6 +1048,11 @@ restart_switch:
             if (jl_options.heap_target_increment == 0)
                 jl_errorf("julia: invalid memory size specified in --heap-target-increment=<size>[<unit>]");
             break;
+        case opt_heap_target_increment_per_thread:
+            if (optarg == NULL || jl_parse_heap_size(optarg, 0, &jl_options.heap_target_increment_per_thread) != 0 ||
+                jl_options.heap_target_increment_per_thread == 0)
+                jl_errorf("julia: invalid memory size specified in --heap-target-increment-per-thread=<size>[<unit>]");
+            break;
         case opt_gc_threads:
         {
             errno = 0;
@@ -1088,6 +1120,11 @@ restart_switch:
                 jl_options.task_metrics = JL_OPTIONS_TASK_METRICS_ON;
             else
                 jl_errorf("julia: invalid argument to --task-metrics={yes|no} (%s)", optarg);
+            break;
+        case opt_safe_crash_log_file:
+            jl_options.safe_crash_log_file = strdup(optarg);
+            if (jl_options.safe_crash_log_file == NULL)
+                jl_error("julia: failed to allocate memory for --safe-crash-log-file");
             break;
         case opt_compress_sysimage:
             if (!strcmp(optarg,"yes"))

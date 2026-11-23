@@ -880,6 +880,8 @@ function perform_lifting!(compact::IncrementalCompact,
     return Pair{Any, PhiNest}(stmt_val, PhiNest(visited_philikes, lifted_philikes, lifted_leaves, reverse_mapping, walker_callback))
 end
 
+const MAX_LIFTED_APPLY_TUPLE_LENGTH = 32 # same as the default `max_tuple_splat`
+
 # Handle _apply_iterate calls: convert arguments to use `Core.svec`.
 # The behavior of `Core.svec` (with boxing) better matches the ABI of codegen.
 function lift_apply_args!(compact::IncrementalCompact, idx::Int, stmt::Expr)
@@ -898,7 +900,10 @@ function lift_apply_args!(compact::IncrementalCompact, idx::Int, stmt::Expr)
             if svec_args === nothing
                 # Fallback path: generate getfield calls for tuple elements
                 tuple_length = length(arg_type.parameters)
-                if tuple_length > 0 && !isvarargtype(arg_type.parameters[tuple_length])
+                # Longer tuples were deliberately not unrolled by the inliner (`max_tuple_splat`).
+                # Expanding them here costs one statement per element and call.
+                if 0 < tuple_length <= MAX_LIFTED_APPLY_TUPLE_LENGTH &&
+                        !isvarargtype(arg_type.parameters[tuple_length])
                     svec_args = Vector{Any}(undef, tuple_length + 1)
                     for j in 1:tuple_length
                         getfield_call = Expr(:call, GlobalRef(Core, :getfield), arg, j)
@@ -1788,10 +1793,15 @@ function sroa_mutables!(ir::IRCode, defuses::IdDict{Int,Tuple{SPCSet,SSADefUse}}
         # show up in the nuses_total count.
         nleaves = length(defuse.uses) + length(defuse.defs)
         nuses = 0
+        nintermediaries = 0
         for iidx in intermediaries
+            # An intermediary that DCE already deleted no longer contributes its own use
+            # to `used_ssas[defidx]`, so it must not be subtracted again below.
+            ir[SSAValue(iidx)][:stmt] === nothing && continue
             nuses += used_ssas[iidx]
+            nintermediaries += 1
         end
-        nuses_total = used_ssas[defidx] + nuses - length(intermediaries)
+        nuses_total = used_ssas[defidx] + nuses - nintermediaries
         all_eliminated = all_forwarded = true
         if nleaves ≠ nuses_total
             finalizer_useidx = find_finalizer_useidx(defuse)

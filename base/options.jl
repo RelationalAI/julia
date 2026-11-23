@@ -62,6 +62,7 @@ struct JLOptions
     heap_size_hint::UInt64
     hard_heap_limit::UInt64
     heap_target_increment::UInt64
+    heap_target_increment_per_thread::UInt64
     trace_compile_timing::Int8
     trim::Int8
     trace_eval::Int8
@@ -70,6 +71,7 @@ struct JLOptions
     gc_sweep_always_full::Int8
     compress_sysimage::Int8
     alert_on_critical_error::Int8
+    safe_crash_log_file::Ptr{UInt8}
 end
 
 # This runs early in the sysimage != is not defined yet

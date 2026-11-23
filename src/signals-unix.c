@@ -42,7 +42,7 @@
 #endif
 
 // 8M signal stack, same as default stack size (though we barely use this)
-static const size_t sig_stack_size = 8 * 1024 * 1024;
+const size_t sig_stack_size = 8 * 1024 * 1024;
 
 #include "julia_assert.h"
 
@@ -991,6 +991,10 @@ static void do_profile(void)
     for (int idx = nthreads; idx-- > 0; ) {
         // Stop the threads in the random order.
         int tid = randperm[idx];
+        // skip heartbeat thread
+        if (tid == heartbeat_tid) {
+            return;
+        }
         // do backtrace for profiler
         if (!profile_running)
             return;
@@ -1229,7 +1233,7 @@ static void *signal_listener(void *arg)
             jl_safe_printf("\nsignal (%d): %s\n", sig, strsignal(sig));
             size_t i;
             for (i = 0; i < signal_bt_size; i += jl_bt_entry_size(signal_bt_data + i)) {
-                jl_fprint_bt_entry_codeloc(ios_safe_stderr, signal_bt_data + i);
+                jl_fprint_bt_entry_codeloc(ios_safe_stderr, sig, signal_bt_data + i);
             }
             jl_safe_printf("\n");
             // Enable trace compilation to stderr with timing during profile collection

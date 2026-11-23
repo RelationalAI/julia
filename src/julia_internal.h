@@ -267,6 +267,7 @@ extern volatile size_t profile_bt_size_max;
 extern volatile size_t profile_bt_size_cur;
 extern volatile int profile_running;
 extern volatile int profile_all_tasks;
+extern int heartbeat_tid; // Mostly used to ensure we skip this thread in the CPU profiler. XXX: not implemented on Windows
 // Ensures that we can safely read the `live_tasks`field of every TLS when profiling.
 // We want to avoid the case that a GC gets interleaved with `jl_profile_task` and shrinks
 // the `live_tasks` array while we are reading it or frees tasks that are being profiled.
@@ -282,6 +283,7 @@ extern uv_mutex_t bt_data_prof_lock;
 #define PROFILE_STATE_THREAD_NOT_SLEEPING (1)
 #define PROFILE_STATE_THREAD_SLEEPING (2)
 #define PROFILE_STATE_WALL_TIME_PROFILING (3)
+extern _Atomic(int) n_threads_running;
 void jl_profile_task(void);
 #if defined(_OS_WINDOWS_) && defined(_CPU_X86_64_)
 JL_DLLEXPORT void jl_set_profile_abort_ptr(_Atomic(int) *abort_ptr) JL_NOTSAFEPOINT;
@@ -844,6 +846,33 @@ JL_CALLABLE(jl_f_tuple);
 void jl_install_default_signal_handlers(void);
 void restore_signals(void);
 void jl_install_thread_signal_handler(jl_ptls_t ptls);
+extern const size_t sig_stack_size;
+STATIC_INLINE int jl_inside_signal_handler(void)
+{
+#if (defined(_OS_LINUX_) && defined(_CPU_X86_64_)) || (defined(_OS_DARWIN_) && defined(_CPU_AARCH64_))
+    // Read the stack pointer
+    size_t sp;
+#if defined(_OS_LINUX_) && defined(_CPU_X86_64_)
+    __asm__ __volatile__("movq %%rsp, %0" : "=r"(sp));
+#elif defined(_OS_DARWIN_) && defined(_CPU_AARCH64_)
+    __asm__ __volatile__("mov %0, sp" : "=r"(sp));
+#endif
+    // Check if the stack pointer is within the signal stack
+    jl_task_t *ct = jl_get_current_task();
+    if (ct == NULL || ct->ptls == NULL)
+        return 0;
+    char *stk = (char*)ct->ptls->signal_stack;
+    if (stk == NULL)
+        return 0;
+    size_t ssize = ct->ptls->signal_stack_size ? ct->ptls->signal_stack_size : sig_stack_size;
+    // One guard page for signal_stack.
+    return (char*)sp >= stk - jl_page_size && (char*)sp <= stk + ssize;
+#else
+    return 0;
+#endif
+}
+// File-descriptor for safe logging on signal handling
+extern int jl_sig_fd;
 
 extern uv_loop_t *jl_io_loop;
 JL_DLLEXPORT void jl_uv_flush(uv_stream_t *stream);
@@ -900,6 +929,7 @@ int jl_find_union_component(jl_value_t *haystack, jl_value_t *needle, unsigned *
 jl_datatype_t *jl_new_abstracttype(jl_value_t *name, jl_module_t *module,
                                    jl_datatype_t *super, jl_svec_t *parameters);
 jl_datatype_t *jl_new_uninitialized_datatype(void);
+uintptr_t jl_type_hash_nofail(jl_value_t *v) JL_NOTSAFEPOINT;
 void jl_precompute_memoized_dt(jl_datatype_t *dt, int cacheable);
 JL_DLLEXPORT jl_datatype_t *jl_wrap_Type(jl_value_t *t);  // x -> Type{x}
 jl_vararg_t *jl_wrap_vararg(jl_value_t *t, jl_value_t *n, int check, int nothrow);
@@ -1564,8 +1594,8 @@ void jl_fprint_critical_error(ios_t *t, int sig, int si_code, bt_context_t *cont
 JL_DLLEXPORT void jl_raise_debugger(void) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_gdblookup(void* ip) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT;
-void jl_fprint_native_codeloc(ios_t *s, uintptr_t ip) JL_NOTSAFEPOINT;
-void jl_fprint_bt_entry_codeloc(ios_t *s, jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
+void jl_fprint_native_codeloc(ios_t *s, const char *pre_str, uintptr_t ip) JL_NOTSAFEPOINT;
+void jl_fprint_bt_entry_codeloc(ios_t *s, int sig, jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
 void jl_thread_resume(int tid) JL_NOTSAFEPOINT;
 int jl_thread_suspend(int16_t tid, bt_context_t *ctx) JL_NOTSAFEPOINT;
 

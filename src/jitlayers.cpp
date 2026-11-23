@@ -336,8 +336,11 @@ static std::mutex engine_lock;
 static std::condition_variable engine_wait;
 static int threads_in_compiler_phase;
   // the TSM for each codeinst
-static SmallVector<orc::ThreadSafeModule,0> sharedmodules;
-static DenseMap<jl_code_instance_t*, orc::ThreadSafeModule> emittedmodules;
+  // These hold ThreadSafeModules, whose destructors take the lock of their context. They are
+  // never destroyed: at exit the other threads are suspended at a safepoint, possibly while
+  // compiling with such a lock held, and a static destructor would then wait for it forever.
+static auto &sharedmodules = *new SmallVector<orc::ThreadSafeModule,0>();
+static auto &emittedmodules = *new DenseMap<jl_code_instance_t*, orc::ThreadSafeModule>();
   // the invoke and specsig function names in the JIT
 static DenseMap<jl_code_instance_t*, jl_llvm_functions_t> invokenames;
   // everything that any thread wants to compile right now
@@ -350,7 +353,7 @@ static DenseMap<jl_code_instance_t*, SmallVector<jl_code_instance_t*,0>> complet
   // really need this once JITLink is available everywhere, since every module
   // is automatically complete, and we can emit any required fixups later as a
   // separate module)
-static DenseMap<jl_code_instance_t*, std::tuple<jl_codegen_params_t, int>> incompletemodules;
+static auto &incompletemodules = *new DenseMap<jl_code_instance_t*, std::tuple<jl_codegen_params_t, int>>();
   // the set of incoming unresolved edges resolved by a codeinstance
 static DenseMap<jl_code_instance_t*, SmallVector<jl_code_instance_t*,0>> incomplete_rgraph;
 

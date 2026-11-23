@@ -30,7 +30,9 @@ struct jl_internal_global internal_global;
 #endif
 
 // compute empirical max-probe for a given size
-#define max_probe(size) ((size) <= 1024 ? 16 : (size) >> 6)
+// The table grows when an insert needs more than this many probes, unless it is less than half
+// full. Without the cap a large table fills to about 95% before it grows, and lookups walk long runs.
+#define max_probe(size) ((size) <= 1024 ? 16 : (size) <= 4096 ? (size) >> 6 : 64)
 #define h2index(hv, sz) (size_t)((hv) & ((sz)-1))
 
 // --- type properties and predicates ---
@@ -1039,11 +1041,9 @@ static jl_datatype_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t
     size_t sz = jl_svec_len(cache);
     if (sz == 0)
         return NULL;
-    size_t maxprobe = max_probe(sz);
     _Atomic(jl_datatype_t*) *tab = (_Atomic(jl_datatype_t*)*)jl_svec_data(cache);
     size_t index = h2index(hv, sz);
     size_t orig = index;
-    size_t iter = 0;
     do {
         jl_datatype_t *val = jl_atomic_load_relaxed(&tab[index]);
         if ((jl_value_t*)val == jl_nothing)
@@ -1051,8 +1051,7 @@ static jl_datatype_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t
         if (val->hash == hv && typekey_eq(val, key, n))
             return val;
         index = (index + 1) & (sz - 1);
-        iter++;
-    } while (iter <= maxprobe && index != orig);
+    } while (index != orig);
     return NULL;
 }
 
@@ -1062,11 +1061,9 @@ static jl_datatype_t *lookup_type_setvalue(jl_svec_t *cache, jl_value_t *key1, j
     size_t sz = jl_svec_len(cache);
     if (sz == 0)
         return NULL;
-    size_t maxprobe = max_probe(sz);
     _Atomic(jl_datatype_t*) *tab = (_Atomic(jl_datatype_t*)*)jl_svec_data(cache);
     size_t index = h2index(hv, sz);
     size_t orig = index;
-    size_t iter = 0;
     do {
         jl_datatype_t *val = jl_atomic_load_relaxed(&tab[index]);
         if ((jl_value_t*)val == jl_nothing)
@@ -1074,8 +1071,7 @@ static jl_datatype_t *lookup_type_setvalue(jl_svec_t *cache, jl_value_t *key1, j
         if (val->hash == hv && typekeyvalue_eq(val, key1, key, n, leaf))
             return val;
         index = (index + 1) & (sz - 1);
-        iter++;
-    } while (iter <= maxprobe && index != orig);
+    } while (index != orig);
     return NULL;
 }
 
@@ -1178,7 +1174,24 @@ static int cache_insert_type_set_(jl_svec_t *a, jl_datatype_t *val, uint_t hv, i
         iter++;
     } while (iter <= maxprobe && index != orig);
 
-    return 0;
+    // Types with equal hashes can form a run longer than any probe limit, which no table size
+    // fixes. Lookups probe until an empty slot, so place the type past the limit unless the
+    // table is at least half full.
+    if (index == orig)
+        return 0;
+    size_t used = 0;
+    for (size_t i = 0; i < sz; i++)
+        used += jl_atomic_load_relaxed(&tab[i]) != jl_nothing;
+    if (2 * used >= sz)
+        return 0;
+    while (jl_atomic_load_relaxed(&tab[index]) != jl_nothing)
+        index = (index + 1) & (sz - 1);
+    if (atomic)
+        jl_atomic_store_release(&tab[index], (jl_value_t*)val);
+    else
+        jl_atomic_store_relaxed(&tab[index], (jl_value_t*)val);
+    jl_gc_wb(a, val);
+    return 1;
 }
 
 static void cache_insert_type_set(jl_datatype_t *val, uint_t hv)
@@ -1209,9 +1222,15 @@ static void cache_insert_type_set(jl_datatype_t *val, uint_t hv)
 
 jl_svec_t *cache_rehash_set(jl_svec_t *a, size_t newsz)
 {
-    newsz = newsz ? next_power_of_two(newsz) : 0;
     jl_value_t **ol = jl_svec_data(a);
     size_t sz = jl_svec_len(a);
+    size_t used = 0;
+    for (size_t i = 0; i < sz; i++)
+        used += ol[i] != jl_nothing;
+    // inserts place types past the probe limit only while the table is less than half full
+    if (newsz < 2 * used)
+        newsz = 2 * used;
+    newsz = newsz ? next_power_of_two(newsz) : 0;
     while (1) {
         size_t i;
         jl_svec_t *newa = jl_svec_fill(newsz, jl_nothing);
@@ -1788,6 +1807,14 @@ JL_DLLEXPORT uintptr_t jl_type_hash(jl_value_t *v) JL_NOTSAFEPOINT
     // NOTE: The value of `failed` is purposefully ignored here. The parameter is relevant
     // for other parts of the internal algorithm but not for exposing to the Julia side.
     int failed = 0;
+    return type_hash(v, &failed);
+}
+
+// Like `jl_type_hash`, but also computes a hash for types that have no cached one (they
+// contain a Union or a type variable). Equal types get equal values.
+uintptr_t jl_type_hash_nofail(jl_value_t *v) JL_NOTSAFEPOINT
+{
+    int failed = 1;
     return type_hash(v, &failed);
 }
 

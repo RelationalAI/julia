@@ -30,6 +30,8 @@ static const uint64_t GIGA = 1000000000ULL;
 // Timers to take samples at intervals
 JL_DLLEXPORT void jl_profile_stop_timer(void);
 JL_DLLEXPORT int jl_profile_start_timer(uint8_t);
+// File-descriptor for safe logging on signal handling
+int jl_sig_fd;
 
 ///////////////////////
 // Utility functions //
@@ -650,7 +652,7 @@ void jl_fprint_critical_error(ios_t *s, int sig, int si_code, bt_context_t *cont
         *bt_size = n = rec_backtrace_ctx(bt_data, JL_MAX_BT_SIZE, context, NULL);
     }
     for (i = 0; i < n; i += jl_bt_entry_size(bt_data + i)) {
-        jl_fprint_bt_entry_codeloc(s, bt_data + i);
+        jl_fprint_bt_entry_codeloc(s, sig, bt_data + i);
     }
     jl_gc_debug_fprint_status(s);
     jl_gc_debug_fprint_critical_error(s);

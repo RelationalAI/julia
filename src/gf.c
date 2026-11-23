@@ -124,6 +124,14 @@ void jl_call_tracer(tracer_cb callback, jl_value_t *tracee)
     }
 }
 
+// Returns 1 the first time it is called in a process. `Compiler.ReinferUtils` uses it to drop a
+// lookup cache that was saved into a system image.
+JL_DLLEXPORT int jl_reinfer_cache_first_use(void)
+{
+    static _Atomic(int) used = 0;
+    return !jl_atomic_exchange(&used, 1);
+}
+
 /// ----- Definitions for various internal TypeMaps ----- ///
 
 static int8_t jl_cachearg_offset(void)
@@ -134,13 +142,23 @@ static int8_t jl_cachearg_offset(void)
 /// ----- Insertion logic for special entries ----- ///
 
 
+// The key of a specialization signature in `speckeyset`: the cached hash of the signature if it
+// has one, otherwise the hash that the type cache computes for a type without a cached hash
+// (it contains a Union or a type variable). Never 0, so every signature is indexed. Equal
+// signatures written differently can get different keys, and then different MethodInstances,
+// as in stock Julia for signatures without a cached hash.
+uint_t jl_spec_index_hash(jl_value_t *sig) JL_NOTSAFEPOINT
+{
+    uint_t h = ((jl_datatype_t*)jl_unwrap_unionall(sig))->hash;
+    if (!h)
+        h = jl_type_hash_nofail(sig);
+    return h ? h : 1;
+}
+
 uint_t speccache_hash(size_t idx, jl_value_t *data)
 {
     jl_method_instance_t *ml = (jl_method_instance_t*)jl_svecref(data, idx); // This must always happen inside the lock
-    jl_value_t *sig = ml->specTypes;
-    if (jl_is_unionall(sig))
-        sig = jl_unwrap_unionall(sig);
-    return ((jl_datatype_t*)sig)->hash;
+    return jl_spec_index_hash(ml->specTypes);
 }
 
 static int speccache_eq(size_t idx, const void *ty, jl_value_t *data, uint_t hv)
@@ -153,32 +171,35 @@ static int speccache_eq(size_t idx, const void *ty, jl_value_t *data, uint_t hv)
     jl_value_t *sig = ml->specTypes;
     if (ty == sig)
         return 1;
-    uint_t h2 = ((jl_datatype_t*)(jl_is_unionall(sig) ? jl_unwrap_unionall(sig) : sig))->hash;
-    if (h2 != hv)
+    if (jl_spec_index_hash(sig) != hv)
         return 0;
     return jl_types_equal(sig, (jl_value_t*)ty);
 }
 
 // get or create the MethodInstance for a specialization
+//
+// Every entry of `specializations` is indexed in `speckeyset`, and entries are stored from the
+// front and never move, so the index stays valid for every version of the array. The index is
+// only appended to, after the entry is stored.
 static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PROPAGATES_ROOT, jl_value_t *type, jl_svec_t *sparams, jl_method_instance_t *mi_insert)
 {
     if (m->source == NULL && m->generator == NULL && jl_atomic_load_relaxed(&m->unspecialized) != NULL && m != jl_opaque_closure_method && !m->is_for_opaque_closure)
         return jl_atomic_load_relaxed(&m->unspecialized); // handle builtin methods
     jl_value_t *ut = jl_is_unionall(type) ? jl_unwrap_unionall(type) : type;
     JL_TYPECHK(specializations, datatype, ut);
-    uint_t hv = ((jl_datatype_t*)ut)->hash;
+    uint_t hv = jl_spec_index_hash(type);
     jl_genericmemory_t *speckeyset = NULL;
     jl_value_t *specializations = NULL;
-    size_t i = -1, cl = 0, lastcl;
     for (int locked = 0; locked < 2; locked++) {
         if (locked) {
             if (!sparams) // can't insert without knowing this
                 return NULL;
             JL_LOCK(&m->writelock);
         }
-        lastcl = cl;
+        // load the array before the index: an entry in a singleton or in any array
+        // version is then in the index loaded after it
+        specializations = jl_atomic_load_acquire(&m->specializations);
         speckeyset = jl_atomic_load_acquire(&m->speckeyset);
-        specializations = jl_atomic_load_relaxed(&m->specializations);
         if (specializations == (jl_value_t*)jl_emptysvec)
             continue;
         if (!jl_is_svec(specializations)) {
@@ -190,33 +211,14 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
             }
             continue;
         }
-        cl = jl_svec_len(specializations);
-        if (hv) {
-            ssize_t idx = jl_smallintset_lookup(speckeyset, speccache_eq, type, specializations, hv, 0);
-            if (idx != -1) {
-                jl_method_instance_t *mi = (jl_method_instance_t*)jl_svecref(specializations, idx);
-                if (locked)
-                    JL_UNLOCK(&m->writelock);
-                return mi;
-            }
-        }
-        else {
-            _Atomic(jl_method_instance_t*) *data = (_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations);
-            JL_GC_PUSH1(&specializations); // clang-sa doesn't realize this loop uses specializations
-            // the last lastcl-i-1 elements are already checked when locked, so start search with the new elements only
-            for (i += cl - lastcl; i > 0; i--) {
-                jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[i]);
-                if ((jl_value_t*)mi == jl_nothing)
-                    break;
-                if (jl_types_equal(mi->specTypes, type)) {
-                    if (locked)
-                        JL_UNLOCK(&m->writelock);
-                    JL_GC_POP();
-                    return mi;
-                }
-            }
-            // i points to the first unchecked element, or the place to insert
-            JL_GC_POP();
+        JL_GC_PUSH1(&specializations); // comparing types can reach a safepoint
+        ssize_t idx = jl_smallintset_lookup(speckeyset, speccache_eq, type, specializations, hv, 0);
+        jl_method_instance_t *found = idx != -1 ? (jl_method_instance_t*)jl_svecref(specializations, idx) : NULL;
+        JL_GC_POP();
+        if (found) {
+            if (locked)
+                JL_UNLOCK(&m->writelock);
+            return found;
         }
     }
     jl_method_instance_t *mi = mi_insert ? mi_insert : jl_get_specialized(m, type, sparams);
@@ -225,52 +227,40 @@ static jl_method_instance_t *jl_specializations_get_linfo_(jl_method_t *m JL_PRO
         jl_gc_wb(m, mi);
     }
     else {
-        JL_GC_PUSH1(&mi);
+        JL_GC_PUSH2(&mi, &specializations);
+        size_t cl;
         if (!jl_is_svec(specializations)) {
             jl_method_instance_t *mi = (jl_method_instance_t*)specializations;
-            jl_value_t *type = mi->specTypes;
-            jl_value_t *ut = jl_is_unionall(type) ? jl_unwrap_unionall(type) : type;
-            uint_t hv = ((jl_datatype_t*)ut)->hash;
             cl = 7;
-            i = cl - 1;
             specializations = (jl_value_t*)jl_svec_fill(cl, jl_nothing);
-            jl_svecset(specializations, hv ? 0 : i--, mi);
+            jl_svecset(specializations, 0, mi);
+            // index the entry before publishing the array, since it already exists
+            jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, 0, specializations);
             jl_atomic_store_release(&m->specializations, specializations);
             jl_gc_wb(m, specializations);
-            if (hv)
-                jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, 0, specializations);
         }
-        if (hv) {
-            _Atomic(jl_method_instance_t*) *data = (_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations);
-            for (i = 0; i < cl; i++) {
-                jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[i]);
-                if ((jl_value_t*)mi == jl_nothing)
-                    break;
-                assert(!jl_types_equal(mi->specTypes, type));
-            }
-            // i points at the place to insert
-        }
-        if (hv ? (i + 1 >= cl || jl_svecref(specializations, i + 1) != jl_nothing) : (i <= 1 || jl_svecref(specializations, i - 2) != jl_nothing)) {
+        cl = jl_svec_len(specializations);
+        _Atomic(jl_method_instance_t*) *data = (_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations);
+        size_t i = 0;
+        while (i < cl && (jl_value_t*)jl_atomic_load_relaxed(&data[i]) != jl_nothing)
+            i++;
+        // keep a free slot after the new entry (an array compacted for an image has none)
+        if (i + 1 >= cl) {
             size_t ncl = cl < 7 ? 7 : (cl*3)>>1;
             jl_svec_t *nc = jl_alloc_svec_uninit(ncl);
-            if (i > 0)
-                memcpy((char*)jl_svec_data(nc), jl_svec_data(specializations), sizeof(void*) * i);
-            for (int j = 0; j < ncl - cl; j++)
-                jl_svecset(nc, j+i, jl_nothing);
-            if (i < cl)
-                memcpy((char*)jl_svec_data(nc) + sizeof(void*) * (i + ncl - cl),
-                       (char*)jl_svec_data(specializations) + sizeof(void*) * i,
-                       sizeof(void*) * (cl - i));
+            memcpy((char*)jl_svec_data(nc), jl_svec_data(specializations), sizeof(void*) * i);
+            for (size_t j = i; j < ncl; j++)
+                jl_svecset(nc, j, jl_nothing);
             specializations = (jl_value_t*)nc;
             jl_atomic_store_release(&m->specializations, specializations);
             jl_gc_wb(m, specializations);
-            if (!hv)
-                i += ncl - cl;
         }
         assert(jl_svecref(specializations, i) == jl_nothing);
-        jl_svecset(specializations, i, mi);
-        if (hv)
-            jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, i, specializations);
+        // release: lock-free readers find the entry through the index, but the store of the
+        // MethodInstance must still order its initialization before it
+        jl_atomic_store_release(&((_Atomic(jl_value_t*)*)jl_svec_data(specializations))[i], (jl_value_t*)mi);
+        jl_gc_wb(specializations, mi);
+        jl_smallintset_insert(&m->speckeyset, (jl_value_t*)m, speccache_hash, i, specializations);
         JL_GC_POP();
     }
     JL_UNLOCK(&m->writelock); // may gc
@@ -2424,6 +2414,12 @@ struct _typename_add_backedge {
     jl_value_t *caller;
 };
 
+// Missing-method backedges are recorded as a two-level map
+//     typename => (sig => Vector{CodeInstance})
+// so that adding an edge is a hash lookup (jl_object_id hashes types
+// structurally), rather than a linear scan through every recorded edge with
+// `jl_types_equal`, and so that invalidation intersects each distinct
+// signature only once, no matter how many callers recorded it.
 static void _typename_add_backedge(jl_typename_t *tn, int explct, void *env0)
 {
     struct _typename_add_backedge *env = (struct _typename_add_backedge*)env0;
@@ -2432,41 +2428,33 @@ static void _typename_add_backedge(jl_typename_t *tn, int explct, void *env0)
     if (!explct)
         return;
     jl_genericmemory_t *allbackedges = jl_method_table->backedges;
-    jl_array_t *backedges = (jl_array_t*)jl_eqtable_get(allbackedges, (jl_value_t*)tn, NULL);
-    if (backedges == NULL) {
-        backedges = jl_alloc_vec_any(2);
-        JL_GC_PUSH1(&backedges);
-        jl_array_del_end(backedges, 2);
-        jl_genericmemory_t *newtable = jl_eqtable_put(allbackedges, (jl_value_t*)tn, (jl_value_t*)backedges, NULL);
+    jl_genericmemory_t *table = (jl_genericmemory_t*)jl_eqtable_get(allbackedges, (jl_value_t*)tn, NULL);
+    jl_array_t *callers = table == NULL ? NULL : (jl_array_t*)jl_eqtable_get(table, env->typ, NULL);
+    if (callers == NULL) {
+        // first edge for this signature: add a callers list to the
+        // per-typename table, creating the table itself if necessary
+        jl_array_t *newcallers = jl_alloc_vec_any(0);
+        jl_genericmemory_t *oldtable = table;
+        JL_GC_PUSH2(&newcallers, &table);
+        if (table == NULL)
+            table = (jl_genericmemory_t*)jl_an_empty_memory_any;
+        table = jl_eqtable_put(table, env->typ, (jl_value_t*)newcallers, NULL);
+        if (table != oldtable) {
+            jl_genericmemory_t *newtable = jl_eqtable_put(allbackedges, (jl_value_t*)tn, (jl_value_t*)table, NULL);
+            if (newtable != allbackedges) {
+                jl_method_table->backedges = newtable;
+                jl_gc_wb(jl_method_table, newtable);
+            }
+        }
         JL_GC_POP();
-        if (newtable != allbackedges) {
-            jl_method_table->backedges = newtable;
-            jl_gc_wb(jl_method_table, newtable);
-        }
+        callers = newcallers;
     }
-    // check if the edge is already present and avoid adding a duplicate
-    size_t i, l = jl_array_nrows(backedges);
-    // reuse an already cached instance of this type, if possible
-    // TODO: use jl_cache_type_(tt) like cache_method does, instead of this linear scan?
-    // TODO: use as_global_root and de-dup edges array too
-    for (i = 1; i < l; i += 2) {
-        if (jl_array_ptr_ref(backedges, i) == env->caller) {
-            if (jl_types_equal(jl_array_ptr_ref(backedges, i - 1), env->typ)) {
-                env->typ = jl_array_ptr_ref(backedges, i - 1);
-                return; // this edge already recorded
-            }
-        }
-    }
-    for (i = 1; i < l; i += 2) {
-        if (jl_array_ptr_ref(backedges, i) != env->caller) {
-            if (jl_types_equal(jl_array_ptr_ref(backedges, i - 1), env->typ)) {
-                env->typ = jl_array_ptr_ref(backedges, i - 1);
-                break;
-            }
-        }
-    }
-    jl_array_ptr_1d_push(backedges, env->typ);
-    jl_array_ptr_1d_push(backedges, env->caller);
+    // avoid adding a duplicate edge; a single caller records each signature at
+    // most once in immediate succession, so checking the last entry suffices
+    size_t n = jl_array_nrows(callers);
+    if (n > 0 && jl_array_ptr_ref(callers, n - 1) == env->caller)
+        return; // this edge already recorded
+    jl_array_ptr_1d_push(callers, env->caller);
 }
 
 // add a backedge from a non-existent signature to caller
@@ -2502,15 +2490,19 @@ static void _typename_invalidate_backedges(jl_typename_t *tn, int explct, void *
     JL_GC_PROMISE_ROOTED(env->type);
     JL_GC_PROMISE_ROOTED(env->isect); // isJuliaType considers jl_value_t** to be a julia object too
     JL_GC_PROMISE_ROOTED(env->isect2); // isJuliaType considers jl_value_t** to be a julia object too
-    jl_array_t *backedges = (jl_array_t*)jl_eqtable_get(jl_method_table->backedges, (jl_value_t*)tn, NULL);
-    if (backedges == NULL)
+    jl_genericmemory_t *table = (jl_genericmemory_t*)jl_eqtable_get(jl_method_table->backedges, (jl_value_t*)tn, NULL);
+    if (table == NULL)
         return;
-    jl_value_t **d = jl_array_ptr_data(backedges);
-    size_t i, na = jl_array_nrows(backedges);
-    size_t ins = 0;
-    for (i = 1; i < na; i += 2) {
-        jl_value_t *backedgetyp = d[i - 1];
+    _Atomic(jl_value_t*) *tab = (_Atomic(jl_value_t*)*)table->ptr;
+    size_t i, na = table->length;
+    size_t alive = 0;
+    for (i = 0; i < na; i += 2) {
+        jl_value_t *backedgetyp = jl_atomic_load_relaxed(&tab[i]);
+        jl_value_t *callers = jl_atomic_load_relaxed(&tab[i + 1]);
+        if (callers == NULL)
+            continue; // empty or deleted slot
         JL_GC_PROMISE_ROOTED(backedgetyp);
+        JL_GC_PROMISE_ROOTED(callers);
         int missing = 0;
         if (jl_type_intersection2(backedgetyp, (jl_value_t*)env->type, env->isect, env->isect2)) {
             // See if the intersection was actually already fully
@@ -2540,22 +2532,25 @@ static void _typename_invalidate_backedges(jl_typename_t *tn, int explct, void *
         }
         *env->isect = *env->isect2 = NULL;
         if (missing) {
-            jl_code_instance_t *backedge = (jl_code_instance_t*)d[i];
-            JL_GC_PROMISE_ROOTED(backedge);
-            invalidate_code_instance(backedge, env->max_world, 0);
-            env->invalidated = 1;
-            if (_jl_debug_method_invalidation)
-                jl_array_ptr_1d_push(_jl_debug_method_invalidation, (jl_value_t*)backedgetyp);
+            size_t j, l = jl_array_nrows(callers);
+            for (j = 0; j < l; j++) {
+                jl_code_instance_t *backedge = (jl_code_instance_t*)jl_array_ptr_ref(callers, j);
+                JL_GC_PROMISE_ROOTED(backedge);
+                invalidate_code_instance(backedge, env->max_world, 0);
+                env->invalidated = 1;
+                if (_jl_debug_method_invalidation)
+                    jl_array_ptr_1d_push(_jl_debug_method_invalidation, (jl_value_t*)backedgetyp);
+            }
+            // remove this entry (cf. `jl_eqtable_pop`)
+            jl_atomic_store_relaxed(&tab[i], jl_nothing); // clear the key
+            jl_atomic_store_relaxed(&tab[i + 1], NULL); // and the value
         }
         else {
-            d[ins++] = d[i - 1];
-            d[ins++] = d[i - 0];
+            alive++;
         }
     }
-    if (ins == 0)
+    if (alive == 0)
         jl_eqtable_pop(jl_method_table->backedges, (jl_value_t*)tn, NULL, NULL);
-    else if (na != ins)
-        jl_array_del_end(backedges, na - ins);
 }
 
 static void invalidate_missing_backedges(struct _typename_invalidate_backedge *env)
@@ -2680,13 +2675,13 @@ static void jl_method_table_invalidate(jl_method_t *replaced, size_t max_world, 
     assert(jl_atomic_load_relaxed(&jl_world_counter) == max_world);
     // Invalidate the backedges
     int invalidated = 0;
-    jl_value_t *specializations = jl_atomic_load_relaxed(&replaced->specializations);
+    jl_value_t *specializations = jl_atomic_load_acquire(&replaced->specializations);
     JL_GC_PUSH1(&specializations);
     if (!jl_is_svec(specializations))
         specializations = (jl_value_t*)jl_svec1(specializations);
     size_t i, l = jl_svec_len(specializations);
     for (i = 0; i < l; i++) {
-        jl_method_instance_t *mi = (jl_method_instance_t*)jl_svecref(specializations, i);
+        jl_method_instance_t *mi = jl_atomic_load_acquire((_Atomic(jl_method_instance_t*)*)jl_svec_data(specializations) + i);
         if ((jl_value_t*)mi != jl_nothing) {
             invalidated = 1;
             invalidate_backedges(mi, max_world, "jl_method_table_disable");
@@ -3058,7 +3053,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                     jl_gc_wb(m2, m2_interferences);
                 }
             }
-            loctag = jl_atomic_load_relaxed(&m->specializations); // use loctag for a gcroot
+            loctag = jl_atomic_load_acquire(&m->specializations); // use loctag for a gcroot
             _Atomic(jl_method_instance_t*) *data;
             size_t l;
             if (jl_is_svec(loctag)) {
@@ -3070,7 +3065,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                 l = 1;
             }
             for (size_t i = 0; i < l; i++) {
-                jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[i]);
+                jl_method_instance_t *mi = jl_atomic_load_acquire(&data[i]);
                 if ((jl_value_t*)mi == jl_nothing)
                     continue;
                 jl_array_ptr_1d_push(oldmi, (jl_value_t*)mi);
@@ -3113,7 +3108,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                     continue;
 
                 // Now examine if this caused any invalidations.
-                loctag = jl_atomic_load_relaxed(&m->specializations); // use loctag for a gcroot
+                loctag = jl_atomic_load_acquire(&m->specializations); // use loctag for a gcroot
                 _Atomic(jl_method_instance_t*) *data;
                 size_t l;
                 if (jl_is_svec(loctag)) {
@@ -3125,7 +3120,7 @@ void jl_method_table_activate(jl_typemap_entry_t *newentry)
                     l = 1;
                 }
                 for (size_t i = 0; i < l; i++) {
-                    jl_method_instance_t *mi = jl_atomic_load_relaxed(&data[i]);
+                    jl_method_instance_t *mi = jl_atomic_load_acquire(&data[i]);
                     if ((jl_value_t*)mi == jl_nothing)
                         continue;
                     if (jl_type_intersection2(type, mi->specTypes, &isect, &isect2)) {

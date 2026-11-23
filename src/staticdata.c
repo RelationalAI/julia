@@ -746,14 +746,21 @@ static void jl_insert_into_serialization_queue(jl_serializer_state *s, jl_value_
             for (size_t i = 0, n = ((jl_genericmemory_t*)allbackedges)->length; i < n; i += 2) {
                 jl_value_t *tn = jl_genericmemory_ptr_ref(allbackedges, i);
                 jl_queue_for_serialization(s, tn);
-                jl_value_t *backedges = jl_genericmemory_ptr_ref(allbackedges, i + 1);
-                if (backedges && backedges != jl_nothing) {
-                    jl_queue_for_serialization_(s, (jl_value_t*)((jl_array_t*)backedges)->ref.mem, 0, 1);
-                    jl_queue_for_serialization(s, backedges);
-                    for (size_t i = 0, n = jl_array_nrows(backedges); i < n; i += 2) {
-                        jl_value_t *t = jl_array_ptr_ref(backedges, i);
+                jl_value_t *table = jl_genericmemory_ptr_ref(allbackedges, i + 1);
+                if (table && table != jl_nothing) {
+                    // per-typename eqtable of sig => callers
+                    jl_queue_for_serialization_(s, table, 0, 1);
+                    for (size_t j = 0, m = ((jl_genericmemory_t*)table)->length; j < m; j += 2) {
+                        jl_value_t *t = jl_genericmemory_ptr_ref(table, j);
+                        jl_value_t *callers = jl_genericmemory_ptr_ref(table, j + 1);
+                        if (callers == NULL)
+                            continue;
                         assert(!jl_is_code_instance(t));
                         jl_queue_for_serialization(s, t);
+                        // serialize the callers list without forcing the CodeInstances
+                        // in it to be serialized (unreachable ones are pruned later)
+                        jl_queue_for_serialization_(s, (jl_value_t*)((jl_array_t*)callers)->ref.mem, 0, 1);
+                        jl_queue_for_serialization(s, callers);
                     }
                 }
             }
@@ -2450,26 +2457,37 @@ static void jl_prune_mi_backedges(jl_array_t *backedges)
     jl_array_del_end(backedges, n - ins);
 }
 
-static void jl_prune_tn_backedges(jl_array_t *backedges)
+static void jl_prune_tn_backedges(jl_genericmemory_t *table)
 {
-    size_t i = 0, ins = 0, n = jl_array_nrows(backedges);
-    for (i = 1; i < n; i += 2) {
-        jl_value_t *ci = jl_array_ptr_ref(backedges, i);
-        if (ptrhash_get(&serialization_order, ci) != HT_NOTFOUND) {
-            jl_array_ptr_set(backedges, ins++, jl_array_ptr_ref(backedges, i - 1));
-            jl_array_ptr_set(backedges, ins++, ci);
+    _Atomic(jl_value_t*) *tab = (_Atomic(jl_value_t*)*)table->ptr;
+    for (size_t i = 0, n = table->length; i < n; i += 2) {
+        jl_value_t *callers = jl_atomic_load_relaxed(&tab[i + 1]);
+        if (callers == NULL)
+            continue; // empty or deleted slot
+        size_t j, ins = 0, l = jl_array_nrows(callers);
+        for (j = 0; j < l; j++) {
+            jl_value_t *ci = jl_array_ptr_ref(callers, j);
+            if (ptrhash_get(&serialization_order, ci) != HT_NOTFOUND)
+                jl_array_ptr_set((jl_array_t*)callers, ins++, ci);
+        }
+        // compact in place: the array was already queued for serialization, so
+        // pruned CodeInstances must not remain reachable from it
+        jl_array_del_end((jl_array_t*)callers, l - ins);
+        if (ins == 0) {
+            // no caller is being serialized: drop the entry (cf. `jl_eqtable_pop`)
+            jl_atomic_store_relaxed(&tab[i], jl_nothing); // clear the key
+            jl_atomic_store_relaxed(&tab[i + 1], NULL); // and the value
         }
     }
-    jl_array_del_end(backedges, n - ins);
 }
 
 static void jl_prune_mt_backedges(jl_genericmemory_t *allbackedges)
 {
     for (size_t i = 0, n = allbackedges->length; i < n; i += 2) {
         jl_value_t *tn = jl_genericmemory_ptr_ref(allbackedges, i);
-        jl_value_t *backedges = jl_genericmemory_ptr_ref(allbackedges, i + 1);
-        if (tn && tn != jl_nothing && backedges)
-            jl_prune_tn_backedges((jl_array_t*)backedges);
+        jl_value_t *table = jl_genericmemory_ptr_ref(allbackedges, i + 1);
+        if (tn && tn != jl_nothing && table && table != jl_nothing)
+            jl_prune_tn_backedges((jl_genericmemory_t*)table);
     }
 }
 
@@ -2520,14 +2538,21 @@ static void jl_prune_idset(_Atomic(jl_svec_t*) *pkeys, _Atomic(jl_genericmemory_
     assert(serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] == keys);
     ptrhash_put(&serialization_order, keys2, idx);
     serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] = keys2;
+    jl_atomic_store_relaxed(pkeys, keys2);
+    jl_gc_wb(parent, keys2);
 
     idx = ptrhash_get(&serialization_order, keyset);
-    assert(idx != HT_NOTFOUND && idx != (void*)(uintptr_t)-1);
+    if (idx == HT_NOTFOUND) {
+        // the shared empty keyset, which belongs to an earlier image and is not serialized
+        // here; every kept key is indexed, so there are none
+        assert(keyset == (jl_genericmemory_t*)jl_an_empty_memory_any);
+        assert(keys_list.len == 0);
+        return;
+    }
+    assert(idx != (void*)(uintptr_t)-1);
     assert(serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] == keyset);
     ptrhash_put(&serialization_order, jl_atomic_load_relaxed(&keyset2), idx);
     serialization_queue.items[(char*)idx - 1 - (char*)HT_NOTFOUND] = jl_atomic_load_relaxed(&keyset2);
-    jl_atomic_store_relaxed(pkeys, keys2);
-    jl_gc_wb(parent, keys2);
     jl_atomic_store_relaxed(pkeyset, jl_atomic_load_relaxed(&keyset2));
     jl_gc_wb(parent, jl_atomic_load_relaxed(&keyset2));
 }
@@ -3259,6 +3284,7 @@ static void jl_save_system_image_to_stream(ios_t *f, jl_array_t *mod_array,
         write_padding(f, LLT_ALIGN(ios_pos(f), 8) - ios_pos(f));
         s.s = f;
         if (worklist == NULL) {
+            write_uint32(f, JL_SYSIMG_STREAM_TAG);
             size_t i;
             for (i = 0; tags[i] != NULL; i++) {
                 jl_value_t *tag = *tags[i];
@@ -3881,6 +3907,10 @@ static void jl_restore_system_image_from_stream_(ios_t *f, jl_image_t *image,
     s.s = f;
     uintptr_t offset_restored = 0, offset_init_order = 0, offset_extext_methods = 0, offset_new_ext_cis = 0, offset_method_roots_list = 0;
     if (!s.incremental) {
+        if (read_uint32(f) != JL_SYSIMG_STREAM_TAG) {
+            jl_safe_printf("ERROR: System image file is not compatible with this version of Julia\n");
+            jl_exit(1);
+        }
         size_t i;
         for (i = 0; tags[i] != NULL; i++) {
             jl_value_t **tag = tags[i];

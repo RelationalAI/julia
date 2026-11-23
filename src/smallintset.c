@@ -9,8 +9,6 @@
 #endif
 #include "julia_assert.h"
 
-// compute empirical max-probe for a given size
-#define max_probe(size) ((size) <= 1024 ? 16 : (size) >> 6)
 #define h2index(hv, sz) (size_t)((hv) & ((sz)-1))
 
 // a set of small positive integers representing the indices into another set
@@ -124,10 +122,10 @@ ssize_t jl_smallintset_lookup(jl_genericmemory_t *cache, smallintset_eq eq, cons
     if (sz == 0)
         return -1;
     JL_GC_PUSH1(&cache);
-    size_t maxprobe = max_probe(sz);
     size_t index = h2index(hv, sz);
     size_t orig = index;
-    size_t iter = 0;
+    // no slot is ever emptied again (a pop leaves a tombstone), so every key is found
+    // before the first empty slot, however far its insertion had to probe
     do {
         size_t val1 = jl_intref_acquire(cache, index);
         if (val1 == 0) {
@@ -141,31 +139,61 @@ ssize_t jl_smallintset_lookup(jl_genericmemory_t *cache, smallintset_eq eq, cons
             return val1 - 1;
         }
         index = (index + 1) & (sz - 1);
-        iter++;
-    } while (iter <= maxprobe && index != orig);
+    } while (index != orig);
     JL_GC_POP();
     return -1;
 }
 
+#define SMALLINTSET_PROBE 8 // the longest linear search in a typemap list
+
+static inline size_t smallintset_rawref(const jl_genericmemory_t *arr, size_t idx) JL_NOTSAFEPOINT
+{
+    jl_value_t *el = (jl_value_t*)jl_typetagof(arr);
+    if (el == jl_memory_uint8_type)
+        return jl_atomic_load_relaxed(&((_Atomic(uint8_t)*)arr->ptr)[idx]);
+    else if (el == jl_memory_uint16_type)
+        return jl_atomic_load_relaxed(&((_Atomic(uint16_t)*)arr->ptr)[idx]);
+    else
+        return jl_atomic_load_relaxed(&((_Atomic(uint32_t)*)arr->ptr)[idx]);
+}
+
+// Insert `val1` into the first free slot (empty or a tombstone) of its probe: 1 when done,
+// else 0 to grow the table or -1 to rehash it at the same size. The probe is measured to the
+// first empty slot, where a lookup that misses stops. Past the length of a typemap list, a
+// table at least half full (`val1` approximates the count) grows rather than probing further,
+// so that doubling it leaves it at least a quarter full however many keys share a hash, and
+// one with tombstones on the way is rehashed instead, since nothing else empties them.
 static int smallintset_insert_(jl_genericmemory_t *a, uint_t hv, size_t val1) JL_NOTSAFEPOINT
 {
     size_t sz = a->length;
     if (sz <= 1)
         return 0;
-    size_t orig, index, iter;
-    iter = 0;
-    index = h2index(hv, sz);
-    orig = index;
-    size_t maxprobe = max_probe(sz);
+    size_t tombstone = jl_max_int(a);
+    size_t index = h2index(hv, sz), orig = index, iter = 0;
+    ssize_t slot = -1;
+    int tombstones = 0;
     do {
-        if (jl_intref(a, index) == 0) {
-            jl_intset_release(a, index, val1);
-            return 1;
+        size_t v = smallintset_rawref(a, index);
+        if (v == 0 || v == tombstone) {
+            if (slot == -1)
+                slot = index;
+            if (v == 0)
+                break;
+            tombstones = 1;
         }
         index = (index + 1) & (sz - 1);
         iter++;
-    } while (iter <= maxprobe && index != orig);
-    return 0;
+    } while (index != orig);
+    if (slot == -1)
+        return 0; // no free slot
+    if (iter > SMALLINTSET_PROBE) {
+        if (val1 * 2 >= sz)
+            return 0;
+        if (tombstones)
+            return -1;
+    }
+    jl_intset_release(a, slot, val1);
+    return 1;
 }
 //}
 
@@ -178,23 +206,21 @@ void jl_smallintset_insert(_Atomic(jl_genericmemory_t*) *pcache, jl_value_t *par
         if (parent) jl_gc_wb(parent, a);
     }
     while (1) {
-        if (smallintset_insert_(a, hash(val, data), val + 1))
+        int r = smallintset_insert_(a, hash(val, data), val + 1);
+        if (r > 0)
             return;
 
-        /* table full */
-        /* rehash to grow and retry the insert */
-        /* it's important to grow the table really fast; otherwise we waste */
-        /* lots of time rehashing all the keys over and over. */
+        /* no free slot, or a long probe: double the table, or (for a table under half full
+           with tombstones on the way) rehash it at the same size to drop them */
         size_t newsz;
         a = jl_atomic_load_relaxed(pcache);
         size_t sz = a->length;
         if (sz < HT_N_INLINE)
             newsz = HT_N_INLINE;
-        else if (sz >= (1 << 19) || (sz <= (1 << 8)))
-            newsz = sz << 1;
         else
-            newsz = sz << 2;
-        a = smallintset_rehash(a, hash, data, newsz, 0);
+            newsz = r < 0 ? sz : sz << 1;
+        // size the element type for `val` too: it can be the first and largest entry
+        a = smallintset_rehash(a, hash, data, newsz, val + 1);
         jl_atomic_store_release(pcache, a);
         if (parent) jl_gc_wb(parent, a);
     }
@@ -215,7 +241,7 @@ jl_genericmemory_t* smallintset_rehash(jl_genericmemory_t* a, smallintset_hash h
         for (i = 0; i < sz; i += 1) {
             size_t val1 = jl_intref(a, i);
             if (val1 != 0) {
-                if (!smallintset_insert_(newa, hash(val1 - 1, data), val1)) {
+                if (smallintset_insert_(newa, hash(val1 - 1, data), val1) <= 0) {
                     break;
                 }
             }

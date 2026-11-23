@@ -2159,6 +2159,17 @@ let src = code_typed1((Vector{Any},)) do xs
     @test count(iscall((src, Core.svec)), src.code) == 1
 end
 
+# A tuple that is too long for the inliner to unroll (`max_tuple_splat`) must not be expanded
+# into one `getfield` per element either: recursion over `Base.tail` is quadratic otherwise.
+let src = code_typed1(Base.tail, (NTuple{40,Vector{Int}},))
+    @test count(iscall((src, Core._apply_iterate)), src.code) == 1
+    @test count(iscall((src, Core.svec)), src.code) == 0
+    @test count(iscall((src, getfield)), src.code) == 0
+end
+let src = code_typed1(Base.tail, (NTuple{32,Vector{Int}},))
+    @test count(iscall((src, Core._apply_iterate)), src.code) == 0
+end
+
 # Negative NewSSAValue ids must be preserved during compaction
 function f_57827(op, init, x)
     v = op(init, x)
@@ -2174,3 +2185,21 @@ let rf = (acc, x) -> ifelse(x > acc[1], (x,), (acc[1],))
     ir = first(only(Base.code_ircode(f_57827, (typeof(rf), Tuple{Float64}, Int64); optimize_until="CC: SROA")))
     @test ir isa Compiler.IRCode
 end
+
+# SROA must not treat a `Core.Box` as non-escaping when the `π` node it reaches its
+# only `getfield` through was already deleted by DCE: the box still escapes via the
+# closure that captures it.
+@noinline sroa_box_apply(f, xs) = map(f, xs)
+function sroa_box_count_from(xs, start::Int)
+    ii = start
+    function bump(x::Int)
+        y = x + ii
+        ii += 1
+        return y
+    end
+    bump(x) = x
+    return (sroa_box_apply(bump, xs), ii)
+end
+sroa_box_first_only(xs) = sroa_box_count_from(xs, 10)[1]
+@test sroa_box_first_only(Any[1, 2]) == [11, 13]
+@test sroa_box_count_from(Any[1, 2], 10) == ([11, 13], 12)

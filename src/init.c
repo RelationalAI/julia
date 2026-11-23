@@ -197,7 +197,16 @@ void jl_task_frame_noreturn(jl_task_t *ct) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_exit(int exitcode)
 {
     jl_atexit_hook(exitcode);
-    exit(exitcode);
+    jl_exit_after_atexit_hook(exitcode);
+}
+
+// Threads that were in a GC-safe region (e.g. compiling) keep running after jl_atexit_hook,
+// and threads parked at a safepoint may hold locks. Running C++ static destructors and
+// library finalizers next to them can deadlock or corrupt the heap, so skip them.
+JL_DLLEXPORT void JL_NORETURN jl_exit_after_atexit_hook(int exitcode)
+{
+    fflush(NULL);
+    _exit(exitcode);
 }
 
 // cause this process to exit with WTERMSIG(signo),
@@ -560,6 +569,8 @@ extern jl_mutex_t global_roots_lock;
 extern jl_mutex_t profile_show_peek_cond_lock;
 extern jl_mutex_t jl_typeinf_lock;
 
+extern void jl_init_heartbeat(void);
+
 static void restore_fp_env(void)
 {
     if (jl_set_zero_subnormals(0) || jl_set_default_nans(0)) {
@@ -622,6 +633,11 @@ static NOINLINE void _finish_jl_init_(jl_image_buf_t sysimage, jl_ptls_t ptls, j
     jl_start_threads();
     jl_start_gc_threads();
     uv_barrier_wait(&thread_init_done);
+
+    if (jl_base_module != NULL) {
+        // requires code in Base
+        jl_init_heartbeat();
+    }
 
     jl_gc_enable(1);
 
@@ -705,6 +721,12 @@ JL_DLLEXPORT void jl_init_(jl_image_buf_t sysimage)
     init_global_mutexes();
     jl_precompile_toplevel_module = NULL;
     ios_set_io_wait_func = jl_set_io_wait;
+#ifdef _OS_LINUX_
+    // Keep libuv's fs requests off io_uring: in libuv 1.48 uv__iou_submit has no full barrier
+    // before it checks IORING_SQ_NEED_WAKEUP, so a request can stay unsubmitted while the SQPOLL
+    // thread sleeps. libuv 1.49 made SQPOLL opt-in (libuv#4492). An explicit setting wins.
+    setenv("UV_USE_IO_URING", "0", 0);
+#endif
     jl_io_loop = uv_default_loop(); // this loop will internal events (spawning process etc.),
                                     // best to call this first, since it also initializes libuv
     jl_init_uv();
@@ -751,6 +773,15 @@ JL_DLLEXPORT void jl_init_(jl_image_buf_t sysimage)
     jl_init_threadinginfra();
     if (jl_options.handle_signals == JL_OPTIONS_HANDLE_SIGNALS_ON)
         jl_install_default_signal_handlers();
+
+#if (defined(_OS_LINUX_) && defined(_CPU_X86_64_)) || (defined(_OS_DARWIN_) && defined(_CPU_AARCH64_))
+    if (jl_options.safe_crash_log_file != NULL) {
+        jl_sig_fd = open(jl_options.safe_crash_log_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (jl_sig_fd == -1) {
+            jl_error("fatal error: could not open safe crash log file for writing");
+        }
+    }
+#endif
 
     jl_gc_init();
 

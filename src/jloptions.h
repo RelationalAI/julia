@@ -66,6 +66,7 @@ typedef struct {
     uint64_t heap_size_hint;
     uint64_t hard_heap_limit;
     uint64_t heap_target_increment;
+    uint64_t heap_target_increment_per_thread;
     int8_t trace_compile_timing;
     int8_t trim;
     int8_t trace_eval;
@@ -74,6 +75,7 @@ typedef struct {
     int8_t gc_sweep_always_full;
     int8_t compress_sysimage;
     int8_t alert_on_critical_error;
+    const char *safe_crash_log_file;
 } jl_options_t;
 
 #endif
